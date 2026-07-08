@@ -58,4 +58,4 @@ K2 kurz in Listen = Discovery neu anstoßen.
 
 ## Lizenz
 
-CC BY-NC-SA 4.0
+CC BY-NC-SA 4.0 – Tobias Stewen.
