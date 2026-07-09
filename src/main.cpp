@@ -1,7 +1,7 @@
 // Infinitag Config-Box – main entry point.
 //
 // Hardware: ESP32-C3 Super Mini + 0.96" SSD1315 OLED (I2C, 4 buttons)
-//           + KY-040 rotary encoder + 1x SK6812RGBW status LED.
+//           + KY-040 rotary encoder. Status feedback happens on the OLED.
 // Concept & protocol: wissensbasis/18-config-tool.md and
 //                     wissensbasis/12-refactor-station-v2.md §3.
 
@@ -12,19 +12,16 @@
 #include "DeviceRegistry.h"
 #include "EspNowService.h"
 #include "InputController.h"
-#include "StatusLed.h"
 #include "UiController.h"
 
 static EspNowService gNet;
 static DeviceRegistry gRegistry;
 static InputController gInput;
-static StatusLed gLed;
-static UiController gUi(gNet, gRegistry, gInput, gLed);
+static UiController gUi(gNet, gRegistry, gInput);
 
 void setup() {
   Serial.begin(115200);  // USB-CDC, no waiting: box must boot without host
 
-  gLed.begin();
   gInput.begin();
 
   Wire.begin(cfg::PIN_I2C_SDA, cfg::PIN_I2C_SCL);
@@ -32,7 +29,6 @@ void setup() {
 
   if (!gNet.begin(cfg::ESPNOW_CHANNEL)) {
     Serial.println("[ERR] ESP-NOW init failed");
-    gLed.flashError();
   } else {
     Serial.printf("[OK] Config-Box up, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
                   gNet.ownMac()[0], gNet.ownMac()[1], gNet.ownMac()[2],
@@ -47,5 +43,4 @@ void loop() {
   while (gNet.receive(rx)) gUi.onPacket(rx);
 
   gUi.tick();
-  gLed.tick();
 }

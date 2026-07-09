@@ -15,12 +15,10 @@
 #include "DeviceRegistry.h"
 #include "EspNowService.h"
 #include "InputController.h"
-#include "StatusLed.h"
 
 class UiController {
  public:
-  UiController(EspNowService &net, DeviceRegistry &reg, InputController &in,
-               StatusLed &led);
+  UiController(EspNowService &net, DeviceRegistry &reg, InputController &in);
 
   void begin();
   void tick();                      // input handling + periodic timers
@@ -80,7 +78,6 @@ class UiController {
   EspNowService &_net;
   DeviceRegistry &_reg;
   InputController &_in;
-  StatusLed &_led;
   U8G2_SSD1306_128X64_NONAME_F_HW_I2C _oled;
 
   Screen _screen = SCR_MAIN;

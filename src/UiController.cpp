@@ -19,8 +19,8 @@ static const char *STATION_ITEMS[] = {"Liste", "Neue Station (Stab)",
 static constexpr uint8_t STATION_COUNT = 3;
 
 UiController::UiController(EspNowService &net, DeviceRegistry &reg,
-                           InputController &in, StatusLed &led)
-    : _net(net), _reg(reg), _in(in), _led(led),
+                           InputController &in)
+    : _net(net), _reg(reg), _in(in),
       _oled(U8G2_R0, /* reset=*/U8X8_PIN_NONE) {}
 
 void UiController::begin() {
@@ -34,9 +34,6 @@ void UiController::begin() {
 // ---------------------------------------------------------------------------
 
 void UiController::gotoScreen(Screen s) {
-  // leaving setup mode -> LED back to idle
-  if (_screen == SCR_SETUP_WAIT && s != SCR_SETUP_WAIT) _led.idle();
-
   _screen = s;
   _cursor = 0;
   _valueEditing = false;
@@ -64,7 +61,6 @@ void UiController::startDiscovery(uint8_t deviceType) {
   p.token = _discoverToken;
   p.payload[0] = deviceType;  // filter (Doc 12 §3.5)
   _net.sendBroadcast(p);
-  _led.flashTx();
 }
 
 void UiController::sendIdentify(const Device &d) {
@@ -81,7 +77,6 @@ void UiController::beginSetupMode() {
   _setupStartedMs = millis();
   _lastSetupTxMs = 0;  // forces immediate send in handleTimers()
   _setupResult[0] = '\0';
-  _led.setupMode();
 }
 
 // ---------------------------------------------------------------------------
@@ -154,10 +149,8 @@ void UiController::sendCfgWrite() {
     _awaitingAck = true;
     _ackDeadline = millis() + cfg::ACK_TIMEOUT_MS;
     snprintf(_statusLine, sizeof(_statusLine), "Speichere...");
-    _led.flashTx();
   } else {
     snprintf(_statusLine, sizeof(_statusLine), "Sendefehler!");
-    _led.flashError();
   }
   _dirty = true;
 }
@@ -167,11 +160,7 @@ void UiController::sendTestSound() {
   init(p, MSG_CFG_TEST_SOUND, DEV_STATION);
   p.station_id = _editDev.id;
   p.payload[0] = _testSound;
-  if (_net.send(_editDev.mac, p)) {
-    _led.flashTx();
-  } else {
-    _led.flashError();
-  }
+  _net.send(_editDev.mac, p);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,11 +185,9 @@ void UiController::onPacket(const RxPacket &rx) {
         _awaitingAck = false;
         if (p.payload[0] == ACK_OK) {
           snprintf(_statusLine, sizeof(_statusLine), "Gespeichert");
-          _led.flashOk();
         } else {
           snprintf(_statusLine, sizeof(_statusLine), "NACK Code %u",
                    p.payload[0]);
-          _led.flashError();
         }
         _dirty = true;
       }
@@ -210,7 +197,6 @@ void UiController::onPacket(const RxPacket &rx) {
       if (_screen == SCR_SETUP_WAIT && _setupResult[0] == '\0') {
         snprintf(_setupResult, sizeof(_setupResult), "Station %02u gesetzt",
                  p.payload[0]);
-        _led.flashOk();
         _dirty = true;
       }
       break;
@@ -384,7 +370,6 @@ void UiController::handleTimers() {
     }
     if (now - _setupStartedMs >= (uint32_t)cfg::SETUP_TIMEOUT_S * 1000UL) {
       snprintf(_setupResult, sizeof(_setupResult), "Timeout!");
-      _led.flashError();
       _dirty = true;
     }
   }
@@ -393,7 +378,6 @@ void UiController::handleTimers() {
   if (_awaitingAck && now >= _ackDeadline) {
     _awaitingAck = false;
     snprintf(_statusLine, sizeof(_statusLine), "Keine Antwort!");
-    _led.flashError();
     _dirty = true;
   }
 
@@ -613,8 +597,15 @@ void UiController::render() {
       snprintf(buf, sizeof(buf), "Heap %lu B",
                (unsigned long)ESP.getFreeHeap());
       _oled.drawStr(0, 44, buf);
-      snprintf(buf, sizeof(buf), "Up %lu min",
-               (unsigned long)(millis() / 60000UL));
+      const uint32_t mv = analogReadMilliVolts(cfg::PIN_VBAT);
+      const float vbat = mv * cfg::VBAT_DIVIDER / 1000.0f;
+      if (vbat > 3.0f) {
+        snprintf(buf, sizeof(buf), "Up %lumin Batt %.2fV",
+                 (unsigned long)(millis() / 60000UL), (double)vbat);
+      } else {
+        snprintf(buf, sizeof(buf), "Up %lumin  USB",
+                 (unsigned long)(millis() / 60000UL));
+      }
       _oled.drawStr(0, 55, buf);
       break;
     }

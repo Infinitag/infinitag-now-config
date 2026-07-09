@@ -15,10 +15,8 @@ Hardware gelaufen (Lochraster-Prototyp steht aus).
 ## Hardware
 
 ESP32-C3 Super Mini (IPEX + ext. Antenne), 0,96"-OLED SSD1315 mit
-4-Tasten-Board (I²C), KY-040-Encoder, 4×AA über Schiebeschalter +
-1N5817 an 5V-Pin, Batteriemessung über 100k/47k-Teiler an GPIO3.
-Keine Status-LED – alles Feedback läuft über das OLED (GPIO-Plan v3,
-2026-07-09). Pinbelegung: `src/Config.h`.
+4-Tasten-Board (I²C), KY-040-Encoder, 1× SK6812RGBW, 4×AA über
+Schiebeschalter + 1N5817 an 5V-Pin. Pinbelegung: `src/Config.h`.
 
 ## Bauen & Flashen
 
@@ -36,7 +34,8 @@ pio device monitor                # Log ansehen
 | `src/InputController.*` | Encoder (Interrupt-Quadratur, kein PCNT auf C3) + 5 Tasten mit Entprellung |
 | `src/EspNowService.*` | ESP-NOW-Init, Peer-LRU, RX-Ringpuffer, CRC-Validierung |
 | `src/DeviceRegistry.*` | Geräteliste des letzten Discovery-Zyklus (stateless, max. 32) |
-| `src/UiController.*` | Menü-State-Machine + OLED-Rendering (inkl. Batterieanzeige im Tools-Menü) |
+| `src/UiController.*` | Menü-State-Machine + OLED-Rendering |
+| `src/StatusLed.*` | SK6812-Farbcodes (lila = Setup, blau = TX, grün = OK, rot = Fehler) |
 
 ## Umgesetzt in V0.1
 
@@ -59,4 +58,4 @@ K2 kurz in Listen = Discovery neu anstoßen.
 
 ## Lizenz
 
-CC BY-NC-SA 4.0 – Tobias Stewen.
+CC BY-NC-SA 4.0
