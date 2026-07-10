@@ -1,4 +1,5 @@
 // OLED menu state machine (Doc 18 §5 + §8) for the 0.96" SSD1315 128x64.
+// Two-color panel: rows 0..15 yellow (title bar), rows 16..63 blue (body).
 //
 // Key bindings (Doc 18 §3):
 //   encoder turn        cursor up/down | value +-1

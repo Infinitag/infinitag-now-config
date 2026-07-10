@@ -405,21 +405,23 @@ void UiController::macSuffix(const uint8_t mac[6], char *out) {
   snprintf(out, 7, "%02X%02X%02X", mac[3], mac[4], mac[5]);
 }
 
+// Two-color panel: rows 0..15 are yellow, rows 16..63 are blue. The title
+// bar fills the yellow zone exactly; all body content starts below it.
 void UiController::drawTitle(const char *title, int count) {
-  _oled.drawBox(0, 0, 128, 11);
+  _oled.drawBox(0, 0, 128, 16);
   _oled.setDrawColor(0);
-  _oled.drawStr(2, 9, title);
+  _oled.drawStr(2, 12, title);
   if (count >= 0) {
     char buf[8];
     snprintf(buf, sizeof(buf), "[%d]", count);
-    _oled.drawStr(128 - _oled.getStrWidth(buf) - 2, 9, buf);
+    _oled.drawStr(128 - _oled.getStrWidth(buf) - 2, 12, buf);
   }
   _oled.setDrawColor(1);
 }
 
 void UiController::drawFooter(const char *text) { _oled.drawStr(0, 63, text); }
 
-// generic 4-line scrolling list body between y=21..51
+// generic 4-line scrolling list body between y=24..54 (blue zone only)
 static void drawRows(U8G2 &oled, uint8_t cursor, int rowCount,
                      void (*rowText)(void *, int, char *, size_t), void *ctx) {
   const int first = (cursor > 3) ? cursor - 3 : 0;
@@ -428,7 +430,7 @@ static void drawRows(U8G2 &oled, uint8_t cursor, int rowCount,
     if (idx >= rowCount) break;
     char buf[24];
     rowText(ctx, idx, buf, sizeof(buf));
-    const int y = 21 + line * 10;
+    const int y = 24 + line * 10;
     if (idx == cursor) oled.drawStr(0, y, ">");
     oled.drawStr(7, y, buf);
   }
@@ -468,8 +470,8 @@ void UiController::render() {
                                          : "Targets: Liste",
                 count);
       if (count == 0) {
-        _oled.drawStr(7, 31, "suche Geraete...");
-        _oled.drawStr(7, 41, "K2 = neu suchen");
+        _oled.drawStr(7, 34, "suche Geraete...");
+        _oled.drawStr(7, 44, "K2 = neu suchen");
       } else {
         struct Ctx {
           UiController *ui;
@@ -589,15 +591,20 @@ void UiController::render() {
       char buf[24];
       snprintf(buf, sizeof(buf), "Version %u.%u.%u", cfg::FW_MAJOR,
                cfg::FW_MINOR, cfg::FW_PATCH);
-      _oled.drawStr(0, 22, buf);
+      _oled.drawStr(0, 24, buf);
       const uint8_t *m = _net.ownMac();
       snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", m[0], m[1],
                m[2], m[3], m[4], m[5]);
-      _oled.drawStr(0, 33, buf);
+      _oled.drawStr(0, 34, buf);
       snprintf(buf, sizeof(buf), "Heap %lu B",
                (unsigned long)ESP.getFreeHeap());
       _oled.drawStr(0, 44, buf);
-      const uint32_t mv = analogReadMilliVolts(cfg::PIN_VBAT);
+      // average 8 samples: the 100k/22k divider is high-impedance for the
+      // ADC sample cap; a 100 nF cap at GPIO3 fixes the systematic droop,
+      // averaging smooths the rest
+      uint32_t mvAcc = 0;
+      for (int i = 0; i < 8; i++) mvAcc += analogReadMilliVolts(cfg::PIN_VBAT);
+      const uint32_t mv = mvAcc / 8;
       const float vbat = mv * cfg::VBAT_DIVIDER / 1000.0f;
       if (vbat > 3.0f) {
         snprintf(buf, sizeof(buf), "Up %lumin Batt %.2fV",
@@ -606,7 +613,7 @@ void UiController::render() {
         snprintf(buf, sizeof(buf), "Up %lumin  USB",
                  (unsigned long)(millis() / 60000UL));
       }
-      _oled.drawStr(0, 55, buf);
+      _oled.drawStr(0, 54, buf);
       break;
     }
 

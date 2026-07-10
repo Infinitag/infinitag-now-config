@@ -28,8 +28,9 @@ constexpr uint8_t PIN_ENC_SW  = 21;  // encoder push, active low
 // GPIO9 = onboard BOOT button, keep free
 
 // --- Battery sense -------------------------------------------------------------
-// Divider: VBAT --[100k]-- PIN_VBAT --[47k]-- GND  (6.4 V -> ~2.05 V)
-constexpr float VBAT_DIVIDER = (100.0f + 47.0f) / 47.0f;
+// Divider: VBAT --[100k]-- PIN_VBAT --[10k+12k=22k]-- GND  (6.4 V -> ~1.15 V)
+// (originally planned 47k low side; built with 10k+12k series, 2026-07-09)
+constexpr float VBAT_DIVIDER = (100.0f + 22.0f) / 22.0f;
 
 // --- Radio -----------------------------------------------------------------------
 constexpr uint8_t ESPNOW_CHANNEL = 1;  // all Infinitag devices are pinned here
