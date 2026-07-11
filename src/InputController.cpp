@@ -58,7 +58,7 @@ int InputController::takeEncoderDelta() {
   const int32_t total = q - _takenQuarters;
   const int32_t steps = total / 4;
   _takenQuarters += steps * 4;
-  return (int)steps;
+  return (int)steps * cfg::ENC_DIRECTION;
 }
 
 bool InputController::takePress(Button b) {

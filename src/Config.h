@@ -23,6 +23,7 @@ constexpr uint8_t PIN_I2C_SCL = 7;
 constexpr uint8_t PIN_BTN_K3  = 10;  // OLED module K3 = down / identify toggle
 constexpr uint8_t PIN_BTN_K4  = 20;  // OLED module K4 = OK
 constexpr uint8_t PIN_ENC_SW  = 21;  // encoder push, active low
+constexpr int8_t  ENC_DIRECTION = -1;  // +1 or -1, flips rotation sense to match wiring
 // GPIO2 = free (strapping pin, keep loads without pulldown only)
 // GPIO8 = onboard blue LED (inverted), usable as heartbeat later
 // GPIO9 = onboard BOOT button, keep free
