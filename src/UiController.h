@@ -105,6 +105,7 @@ class UiController {
   uint32_t _setupStartedMs = 0;
   uint32_t _lastSetupTxMs = 0;
   char _setupResult[24] = "";
+  uint8_t _setupNewId = 1;   // id to assign, sent in the SETUP_BEGIN header
 
   // sound test state
   uint8_t _testSound = 0;

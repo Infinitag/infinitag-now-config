@@ -77,6 +77,14 @@ void UiController::beginSetupMode() {
   _setupStartedMs = millis();
   _lastSetupTxMs = 0;  // forces immediate send in handleTimers()
   _setupResult[0] = '\0';
+  // Suggest the next free station id based on the last discovery cycle.
+  uint8_t maxId = 0;
+  for (size_t i = 0;; i++) {
+    Device *d = _reg.byIndex(DEV_STATION, i);
+    if (!d) break;
+    if (d->id > maxId) maxId = d->id;
+  }
+  _setupNewId = (maxId < 99) ? (uint8_t)(maxId + 1) : 99;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +331,10 @@ void UiController::handleInput() {
     }
 
     case SCR_SETUP_WAIT:
+      if (delta && _setupResult[0] == '\0') {
+        _setupNewId = (uint8_t)clampVal(_setupNewId + delta * stepMul, 1, 99);
+        _lastSetupTxMs = 0;  // announce the new id immediately
+      }
       if (back || (push && _setupResult[0] != '\0'))
         gotoScreen(SCR_STATION_MENU);
       break;
@@ -364,6 +376,7 @@ void UiController::handleTimers() {
     if (now - _lastSetupTxMs >= cfg::SETUP_REBROADCAST_MS) {
       Packet p;
       init(p, MSG_SETUP_BEGIN, DEV_STATION);
+      p.station_id = _setupNewId;  // id to assign (protocol note 2026-07-11)
       p.payload[0] = cfg::SETUP_TIMEOUT_S;
       _net.sendBroadcast(p);
       _lastSetupTxMs = now;
@@ -542,9 +555,11 @@ void UiController::render() {
     case SCR_SETUP_WAIT:
       drawTitle("Neue Station");
       if (_setupResult[0] == '\0') {
-        _oled.drawStr(0, 24, "Setup-Modus aktiv.");
-        _oled.drawStr(0, 36, "Trigger an der Wunsch-");
-        _oled.drawStr(0, 46, "Station druecken...");
+        char idLine[24];
+        snprintf(idLine, sizeof(idLine), "Vergebe ID: %02u", _setupNewId);
+        _oled.drawStr(0, 24, idLine);
+        _oled.drawStr(0, 36, "Drehen = ID aendern");
+        _oled.drawStr(0, 46, "Trigger = zuweisen");
         drawFooter("K1=Abbrechen");
       } else {
         _oled.drawStr(0, 34, _setupResult);
