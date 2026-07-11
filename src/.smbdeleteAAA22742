@@ -1,12 +1,13 @@
 // OLED menu state machine (Doc 18 §5 + §8) for the 0.96" SSD1315 128x64.
 // Two-color panel: rows 0..15 yellow (title bar), rows 16..63 blue (body).
 //
-// Interaction model (since 2026-07-11): EVERYTHING is reachable with the
-// encoder alone (turn + push). Every level has an explicit "< Zurueck" row.
-// The OLED buttons are optional shortcuts only:
-//   K1 = back / cancel value edit   K2 (hold) = x10 step / (press) rescan
-//   K3 = identify blink on/off      K4 = OK (same as encoder push)
-// Fast turning accelerates value edits (x10 without any button).
+// Key bindings (Doc 18 §3):
+//   encoder turn        cursor up/down | value +-1
+//   encoder turn + K2   +-10 (big-step modifier, hold)
+//   encoder push / K4   OK / enter / apply value
+//   K1                  back / cancel field edit
+//   K3                  identify blink on/off (lists) | filter (monitor)
+//   K2 short press      re-run discovery (lists)
 
 #pragma once
 #include <Arduino.h>
@@ -33,17 +34,12 @@ class UiController {
     SCR_DEVICE_EDIT,
     SCR_SETUP_WAIT,    // "Neue Station": SETUP_BEGIN active
     SCR_SOUND_TEST,    // pick sound + fire CFG_TEST_SOUND at chosen station
-    SCR_SELF_TEST,     // remote self-test (DEBUG_CMD/DEBUG_RESULT)
     SCR_LIVE_MONITOR,
     SCR_TOOLS_INFO,
     SCR_NOTICE,        // one-line info screen (e.g. "Web-UI ab V0.2")
   };
 
-  enum ListPurpose : uint8_t { LIST_EDIT, LIST_SOUND_TEST, LIST_SELF_TEST };
-
-  // Device lists have two static rows before the devices:
-  // row 0 = "< Zurueck", row 1 = "Neu suchen".
-  static constexpr uint8_t LIST_STATIC_ROWS = 2;
+  enum ListPurpose : uint8_t { LIST_EDIT, LIST_SOUND_TEST };
 
   // --- editing ---------------------------------------------------------------
   static constexpr size_t MAX_FIELDS = 8;
@@ -73,10 +69,10 @@ class UiController {
   void sendCfgWrite();
   void sendTestSound();
   void beginSetupMode();
-  void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
 
   void drawTitle(const char *title, int count = -1);
   void drawFooter(const char *text);
+  void drawList(const char *title);
   void macSuffix(const uint8_t mac[6], char *out);  // "AABBCC"
 
   // --- members -----------------------------------------------------------------
@@ -106,4 +102,18 @@ class UiController {
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
 
   // setup state
-  uint32_t _setupStartedMs = 
+  uint32_t _setupStartedMs = 0;
+  uint32_t _lastSetupTxMs = 0;
+  char _setupResult[24] = "";
+  uint8_t _setupNewId = 1;   // id to assign, sent in the SETUP_BEGIN header
+
+  // sound test state
+  uint8_t _testSound = 0;
+
+  // live monitor
+  HitEntry _hits[MONITOR_RING];
+  size_t _hitCount = 0;
+
+  uint32_t _lastRenderMs = 0;
+  bool _dirty = true;
+};

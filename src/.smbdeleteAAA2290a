@@ -14,22 +14,9 @@ static const char *MAIN_ITEMS[] = {"Stationen", "Targets", "Live-Monitor",
                                    "Web-UI", "Tools"};
 static constexpr uint8_t MAIN_COUNT = 5;
 
-static const char *STATION_ITEMS[] = {"< Zurueck", "Liste",
-                                      "Neue Station (Stab)", "Sound testen",
-                                      "Selbsttest"};
-static constexpr uint8_t STATION_COUNT = 5;
-
-// Self-test rows: 0 = back, 1 = run all, 2..6 = tests 1..5 (DebugTest ids).
-static const char *SELFTEST_ITEMS[] = {"< Zurueck",  "Alle testen",
-                                       "Sound",      "Stab-LEDs",
-                                       "Laser (2s)", "IR-Burst",
-                                       "Trigger (10s)"};
-static constexpr uint8_t SELFTEST_ROWS = 7;
-
-// Per-test DEBUG_CMD parameter and config-box-side wait deadline.
-static const uint8_t SELFTEST_PARAM[5] = {0, 0, 2, 1, 10};
-static const uint32_t SELFTEST_DEADLINE_MS[5] = {30000, 5000, 5000, 5000,
-                                                 15000};
+static const char *STATION_ITEMS[] = {"Liste", "Neue Station (Stab)",
+                                      "Sound testen"};
+static constexpr uint8_t STATION_COUNT = 3;
 
 UiController::UiController(EspNowService &net, DeviceRegistry &reg,
                            InputController &in)
@@ -58,11 +45,6 @@ void UiController::gotoScreen(Screen s) {
       break;
     case SCR_SETUP_WAIT:
       beginSetupMode();
-      break;
-    case SCR_SELF_TEST:
-      for (uint8_t i = 0; i < SELF_TESTS; i++) _selfResult[i] = ' ';
-      _selfRunning = 0;
-      _selfAllMode = false;
       break;
     default:
       break;
@@ -189,24 +171,6 @@ void UiController::sendTestSound() {
   _net.send(_editDev.mac, p);
 }
 
-void UiController::runSelfTest(uint8_t test) {
-  if (test < 1 || test > SELF_TESTS) return;
-  Packet p;
-  init(p, MSG_DEBUG_CMD, _editDev.deviceType);
-  p.payload[0] = test;
-  p.payload[1] = SELFTEST_PARAM[test - 1];
-  if (_net.send(_editDev.mac, p)) {
-    _selfRunning = test;
-    _selfResult[test - 1] = '.';
-    _selfDeadline = millis() + SELFTEST_DEADLINE_MS[test - 1];
-  } else {
-    _selfResult[test - 1] = 'X';
-    _selfRunning = 0;
-    _selfAllMode = false;
-  }
-  _dirty = true;
-}
-
 // ---------------------------------------------------------------------------
 // packet handling (called from loop for every received packet)
 // ---------------------------------------------------------------------------
@@ -234,32 +198,6 @@ void UiController::onPacket(const RxPacket &rx) {
                    p.payload[0]);
         }
         _dirty = true;
-      }
-      break;
-
-    case MSG_DEBUG_RESULT:
-      if (_screen == SCR_SELF_TEST && memcmp(rx.mac, _editDev.mac, 6) == 0) {
-        const uint8_t test = p.payload[0];
-        if (test >= 1 && test <= SELF_TESTS) {
-          char c;
-          switch (p.payload[1]) {
-            case DBG_RES_OK:      c = 'O'; break;  // rendered as "OK"
-            case DBG_RES_FAIL:    c = 'X'; break;
-            case DBG_RES_TIMEOUT: c = 'T'; break;
-            default:              c = 'U'; break;  // unsupported
-          }
-          _selfResult[test - 1] = c;
-          if (_selfRunning == test) _selfRunning = 0;
-          // "Alle testen": advance to the next test in the chain.
-          if (_selfAllMode) {
-            if (test < SELF_TESTS) {
-              runSelfTest(test + 1);
-            } else {
-              _selfAllMode = false;
-            }
-          }
-          _dirty = true;
-        }
       }
       break;
 
@@ -300,9 +238,7 @@ void UiController::handleInput() {
   const bool back = _in.takePress(BTN_K1);
   const bool k2 = _in.takePress(BTN_K2);
   const bool k3 = _in.takePress(BTN_K3);
-  // x10 step: K2 held (shortcut) OR fast encoder turning (encoder-only way).
-  const int32_t stepMul =
-      (_in.isHeld(BTN_K2) || delta >= 4 || delta <= -4) ? 10 : 1;
+  const int32_t stepMul = _in.isHeld(BTN_K2) ? 10 : 1;
 
   if (delta == 0 && !push && !back && !k2 && !k3) return;
   _dirty = true;
@@ -330,21 +266,15 @@ void UiController::handleInput() {
         _cursor = (uint8_t)clampVal(_cursor + delta, 0, STATION_COUNT - 1);
       if (push) {
         switch (_cursor) {
-          case 0: gotoScreen(SCR_MAIN); break;  // < Zurueck
-          case 1:
+          case 0:
             _listType = DEV_STATION;
             _listPurpose = LIST_EDIT;
             gotoScreen(SCR_DEVICE_LIST);
             break;
-          case 2: gotoScreen(SCR_SETUP_WAIT); break;
-          case 3:
+          case 1: gotoScreen(SCR_SETUP_WAIT); break;
+          case 2:
             _listType = DEV_STATION;
             _listPurpose = LIST_SOUND_TEST;
-            gotoScreen(SCR_DEVICE_LIST);
-            break;
-          case 4:
-            _listType = DEV_STATION;
-            _listPurpose = LIST_SELF_TEST;
             gotoScreen(SCR_DEVICE_LIST);
             break;
         }
@@ -353,30 +283,21 @@ void UiController::handleInput() {
       break;
 
     case SCR_DEVICE_LIST: {
-      // rows: 0 = "< Zurueck", 1 = "Neu suchen", 2.. = devices
       const int count = (int)_reg.count(_listType);
-      const int rows = count + LIST_STATIC_ROWS;
-      if (delta) {
-        _cursor = (uint8_t)clampVal(_cursor + delta, 0, rows - 1);
+      if (delta && count > 0) {
+        _cursor = (uint8_t)clampVal(_cursor + delta, 0, count - 1);
         _lastIdentifyMs = 0;  // identify the new cursor entry immediately
       }
       if (k3) _identifyEnabled = !_identifyEnabled;
-      if (k2) startDiscovery(_listType);  // shortcut: manual refresh
-      if (push) {
-        if (_cursor == 0) {
-          gotoScreen(_listType == DEV_STATION ? SCR_STATION_MENU : SCR_MAIN);
-        } else if (_cursor == 1) {
-          startDiscovery(_listType);
-        } else {
-          Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
-          if (d) {
-            if (_listPurpose == LIST_EDIT) {
-              enterEdit(*d);
-            } else {
-              _editDev = *d;  // remember chosen station
-              gotoScreen(_listPurpose == LIST_SOUND_TEST ? SCR_SOUND_TEST
-                                                         : SCR_SELF_TEST);
-            }
+      if (k2) startDiscovery(_listType);  // manual refresh
+      if (push && count > 0) {
+        Device *d = _reg.byIndex(_listType, _cursor);
+        if (d) {
+          if (_listPurpose == LIST_EDIT) {
+            enterEdit(*d);
+          } else {
+            _editDev = *d;  // sound test: remember chosen station
+            gotoScreen(SCR_SOUND_TEST);
           }
         }
       }
@@ -387,7 +308,7 @@ void UiController::handleInput() {
 
     case SCR_DEVICE_EDIT: {
       if (_awaitingAck) break;  // ignore input while waiting for the ACK
-      const int rows = _fieldCount + 2;  // + "[Speichern]" + "[< Zurueck]"
+      const int rows = _fieldCount + 1;  // + "Speichern"
       if (_valueEditing) {
         Field &f = _fields[_cursor];
         if (delta) f.value = clampVal(f.value + delta * f.step * stepMul,
@@ -400,10 +321,8 @@ void UiController::handleInput() {
           if (_cursor < _fieldCount) {
             _valueBackup = _fields[_cursor].value;
             _valueEditing = true;
-          } else if (_cursor == _fieldCount) {
-            sendCfgWrite();
           } else {
-            gotoScreen(SCR_DEVICE_LIST);  // [< Zurueck]
+            sendCfgWrite();
           }
         }
         if (back) gotoScreen(SCR_DEVICE_LIST);
@@ -416,54 +335,18 @@ void UiController::handleInput() {
         _setupNewId = (uint8_t)clampVal(_setupNewId + delta * stepMul, 1, 99);
         _lastSetupTxMs = 0;  // announce the new id immediately
       }
-      // push = cancel while waiting / back once done; K1 identical
-      if (back || push) gotoScreen(SCR_STATION_MENU);
+      if (back || (push && _setupResult[0] != '\0'))
+        gotoScreen(SCR_STATION_MENU);
       break;
 
-    case SCR_SOUND_TEST: {
-      // rows: 0 = "< Zurueck", 1 = "Sound: [xx]", 2 = "[Abspielen]"
-      if (_valueEditing) {
-        if (delta)
-          _testSound = (uint8_t)clampVal(_testSound + delta * stepMul, 0,
-                                         cfg::SOUND_ID_MAX);
-        if (push) _valueEditing = false;  // apply
-        if (back) _valueEditing = false;
-      } else {
-        if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, 2);
-        if (push) {
-          if (_cursor == 0) gotoScreen(SCR_STATION_MENU);
-          else if (_cursor == 1) _valueEditing = true;
-          else sendTestSound();
-        }
-        if (back) gotoScreen(SCR_STATION_MENU);
-      }
+    case SCR_SOUND_TEST:
+      if (delta)
+        _testSound =
+            (uint8_t)clampVal(_testSound + delta * stepMul, 0,
+                              cfg::SOUND_ID_MAX);
+      if (push) sendTestSound();
+      if (back) gotoScreen(SCR_STATION_MENU);
       break;
-    }
-
-    case SCR_SELF_TEST: {
-      if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0,
-                                             SELFTEST_ROWS - 1);
-      if (push && _selfRunning == 0) {
-        if (_cursor == 0) {
-          gotoScreen(SCR_DEVICE_LIST);  // back to the station list
-        } else if (_cursor == 1) {
-          for (uint8_t i = 0; i < SELF_TESTS; i++) _selfResult[i] = ' ';
-          _selfAllMode = true;
-          runSelfTest(1);
-        } else {
-          _selfAllMode = false;
-          runSelfTest((uint8_t)(_cursor - 1));  // rows 2..6 -> tests 1..5
-        }
-      }
-      if (back) {
-        // K1 aborts waiting for a result (the station may still answer,
-        // but we leave the screen deliberately).
-        _selfRunning = 0;
-        _selfAllMode = false;
-        gotoScreen(SCR_DEVICE_LIST);
-      }
-      break;
-    }
 
     case SCR_LIVE_MONITOR:
     case SCR_TOOLS_INFO:
@@ -480,11 +363,10 @@ void UiController::handleInput() {
 void UiController::handleTimers() {
   const uint32_t now = millis();
 
-  // identify blink refresh (Doc 18 §7) – only on real device rows
+  // identify blink refresh (Doc 18 §7)
   if (_screen == SCR_DEVICE_LIST && _identifyEnabled &&
-      _cursor >= LIST_STATIC_ROWS &&
       now - _lastIdentifyMs >= cfg::IDENTIFY_PERIOD_MS) {
-    Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
+    Device *d = _reg.byIndex(_listType, _cursor);
     if (d) sendIdentify(*d);
     _lastIdentifyMs = now;
   }
@@ -509,14 +391,6 @@ void UiController::handleTimers() {
   if (_awaitingAck && now >= _ackDeadline) {
     _awaitingAck = false;
     snprintf(_statusLine, sizeof(_statusLine), "Keine Antwort!");
-    _dirty = true;
-  }
-
-  // self-test: no DEBUG_RESULT within the deadline
-  if (_selfRunning != 0 && now >= _selfDeadline) {
-    _selfResult[_selfRunning - 1] = '?';  // keine Antwort
-    _selfRunning = 0;
-    _selfAllMode = false;
     _dirty = true;
   }
 
@@ -587,7 +461,7 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
-      drawFooter("Drehen + Druecken");
+      drawFooter("Drehen+Push  K4=OK");
       break;
     }
 
@@ -599,36 +473,172 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
+      drawFooter("K1=Zurueck");
       break;
     }
 
     case SCR_DEVICE_LIST: {
       const int count = (int)_reg.count(_listType);
-      const char *title;
-      if (_listPurpose == LIST_SOUND_TEST) title = "Sound-Test: Wahl";
-      else if (_listPurpose == LIST_SELF_TEST) title = "Selbsttest: Wahl";
-      else title = _listType == DEV_STATION ? "Stationen: Liste"
-                                            : "Targets: Liste";
-      drawTitle(title, count);
+      drawTitle(_listType == DEV_STATION ? "Stationen: Liste"
+                                         : "Targets: Liste",
+                count);
+      if (count == 0) {
+        _oled.drawStr(7, 34, "suche Geraete...");
+        _oled.drawStr(7, 44, "K2 = neu suchen");
+      } else {
+        struct Ctx {
+          UiController *ui;
+          uint8_t type;
+        } ctx{this, _listType};
+        drawRows(_oled, _cursor, count,
+                 [](void *c, int i, char *b, size_t n) {
+                   Ctx *x = (Ctx *)c;
+                   Device *d = x->ui->_reg.byIndex(x->type, i);
+                   if (!d) { b[0] = '\0'; return; }
+                   char mac[7];
+                   x->ui->macSuffix(d->mac, mac);
+                   char idBuf[4];
+                   if (d->id == 0) snprintf(idBuf, sizeof(idBuf), "??");
+                   else snprintf(idBuf, sizeof(idBuf), "%02u", d->id);
+                   snprintf(b, n, "%s%s %s %4ddBm",
+                            x->ui->_reg.isDuplicateId(*d) ? "!" : "", idBuf,
+                            mac, d->info.rssi_self);
+                 },
+                 &ctx);
+      }
+      drawFooter(_identifyEnabled ? "K3=Blink aus K2=Suche"
+                                  : "K3=Blink an  K2=Suche");
+      break;
+    }
 
-      struct Ctx {
-        UiController *ui;
-        uint8_t type;
-      } ctx{this, _listType};
-      drawRows(_oled, _cursor, count + LIST_STATIC_ROWS,
+    case SCR_DEVICE_EDIT: {
+      char title[24];
+      char mac[7];
+      macSuffix(_editDev.mac, mac);
+      snprintf(title, sizeof(title), "%s %s",
+               _editDev.deviceType == DEV_STATION ? "Station" : "Target", mac);
+      drawTitle(title);
+
+      const int rows = _fieldCount + 1;
+      struct Ctx { UiController *ui; } ctx{this};
+      drawRows(_oled, _cursor, rows,
                [](void *c, int i, char *b, size_t n) {
-                 Ctx *x = (Ctx *)c;
-                 if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
-                 if (i == 1) { snprintf(b, n, "Neu suchen"); return; }
-                 Device *d = x->ui->_reg.byIndex(x->type,
-                                                 i - LIST_STATIC_ROWS);
-                 if (!d) { b[0] = '\0'; return; }
-                 char mac[7];
-                 x->ui->macSuffix(d->mac, mac);
-                 char idBuf[4];
-                 if (d->id == 0) snprintf(idBuf, sizeof(idBuf), "??");
-                 else snprintf(idBuf, sizeof(idBuf), "%02u", d->id);
-                 snprintf(b, n, "%s%s %s %4ddBm",
-                          x->ui->_reg.isDuplicateId(*d) ? "!" : "", idBuf,
-                          mac, d->info.rssi_self);
-      
+                 UiController *ui = ((Ctx *)c)->ui;
+                 if (i >= ui->_fieldCount) {
+                   snprintf(b, n, "[Speichern]");
+                   return;
+                 }
+                 const Field &f = ui->_fields[i];
+                 char val[12];
+                 if (f.isBitmask) {
+                   snprintf(val, sizeof(val), "%c%c%c",
+                            (f.value & 1) ? '1' : '-',
+                            (f.value & 2) ? '2' : '-',
+                            (f.value & 4) ? '3' : '-');
+                 } else {
+                   snprintf(val, sizeof(val), "%ld%s", (long)f.value,
+                            f.unit ? f.unit : "");
+                 }
+                 const bool editing =
+                     ui->_valueEditing && i == ui->_cursor;
+                 snprintf(b, n, "%-9s:%s%s%s", f.label,
+                          editing ? "[" : " ", val, editing ? "]" : "");
+               },
+               &ctx);
+
+      drawFooter(_statusLine[0] ? _statusLine
+                                : (_valueEditing ? "Push=OK K1=Abbruch"
+                                                 : "K2halt=x10 K1=Zurueck"));
+      break;
+    }
+
+    case SCR_SETUP_WAIT:
+      drawTitle("Neue Station");
+      if (_setupResult[0] == '\0') {
+        char idLine[24];
+        snprintf(idLine, sizeof(idLine), "Vergebe ID: %02u", _setupNewId);
+        _oled.drawStr(0, 24, idLine);
+        _oled.drawStr(0, 36, "Drehen = ID aendern");
+        _oled.drawStr(0, 46, "Trigger = zuweisen");
+        drawFooter("K1=Abbrechen");
+      } else {
+        _oled.drawStr(0, 34, _setupResult);
+        drawFooter("K1/K4=Zurueck");
+      }
+      break;
+
+    case SCR_SOUND_TEST: {
+      char title[24];
+      snprintf(title, sizeof(title), "Sound-Test St.%02u", _editDev.id);
+      drawTitle(title);
+      char big[8];
+      snprintf(big, sizeof(big), "%02u", _testSound);
+      _oled.setFont(u8g2_font_10x20_tf);
+      _oled.drawStr(54, 40, big);
+      _oled.setFont(u8g2_font_6x10_tf);
+      drawFooter("Push=Spielen K1=Zurueck");
+      break;
+    }
+
+    case SCR_LIVE_MONITOR: {
+      drawTitle("Live-Monitor", (int)_hitCount);
+      if (_hitCount == 0) {
+        _oled.drawStr(7, 34, "warte auf Treffer...");
+      } else {
+        struct Ctx { UiController *ui; } ctx{this};
+        drawRows(_oled, 0, (int)_hitCount,
+                 [](void *c, int i, char *b, size_t n) {
+                   UiController *ui = ((Ctx *)c)->ui;
+                   const HitEntry &h = ui->_hits[i];
+                   const uint32_t age = (millis() - h.ms) / 1000;
+                   snprintf(b, n, "%3lus T%02u>S%02u snd=%02u",
+                            (unsigned long)(age > 999 ? 999 : age),
+                            h.targetId, h.stationId, h.soundId);
+                 },
+                 &ctx);
+      }
+      drawFooter("K1=Zurueck");
+      break;
+    }
+
+    case SCR_TOOLS_INFO: {
+      drawTitle("Firmware-Info");
+      char buf[24];
+      snprintf(buf, sizeof(buf), "Version %u.%u.%u", cfg::FW_MAJOR,
+               cfg::FW_MINOR, cfg::FW_PATCH);
+      _oled.drawStr(0, 24, buf);
+      const uint8_t *m = _net.ownMac();
+      snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", m[0], m[1],
+               m[2], m[3], m[4], m[5]);
+      _oled.drawStr(0, 34, buf);
+      snprintf(buf, sizeof(buf), "Heap %lu B",
+               (unsigned long)ESP.getFreeHeap());
+      _oled.drawStr(0, 44, buf);
+      // average 8 samples: the 100k/22k divider is high-impedance for the
+      // ADC sample cap; a 100 nF cap at GPIO3 fixes the systematic droop,
+      // averaging smooths the rest
+      uint32_t mvAcc = 0;
+      for (int i = 0; i < 8; i++) mvAcc += analogReadMilliVolts(cfg::PIN_VBAT);
+      const uint32_t mv = mvAcc / 8;
+      const float vbat = mv * cfg::VBAT_DIVIDER / 1000.0f;
+      if (vbat > 3.0f) {
+        snprintf(buf, sizeof(buf), "Up %lumin Batt %.2fV",
+                 (unsigned long)(millis() / 60000UL), (double)vbat);
+      } else {
+        snprintf(buf, sizeof(buf), "Up %lumin  USB",
+                 (unsigned long)(millis() / 60000UL));
+      }
+      _oled.drawStr(0, 54, buf);
+      break;
+    }
+
+    case SCR_NOTICE:
+      drawTitle("Web-UI");
+      _oled.drawStr(0, 30, "Kommt in V0.2");
+      _oled.drawStr(0, 42, "(SoftAP + Browser)");
+      drawFooter("K1=Zurueck");
+      break;
+  }
+
+  _oled.sendBuffer();
+}

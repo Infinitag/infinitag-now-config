@@ -122,10 +122,9 @@ void UiController::enterEdit(Device &d) {
   _awaitingAck = false;
 
   auto add = [&](const char *label, int32_t val, int32_t mn, int32_t mx,
-                 int32_t st, const char *unit = nullptr, bool bits = false,
-                 bool led = false) {
+                 int32_t st, const char *unit = nullptr, bool bits = false) {
     if (_fieldCount >= MAX_FIELDS) return;
-    _fields[_fieldCount++] = Field{label, val, mn, mx, st, unit, bits, led};
+    _fields[_fieldCount++] = Field{label, val, mn, mx, st, unit, bits};
   };
 
   if (d.deviceType == DEV_STATION) {
@@ -134,9 +133,6 @@ void UiController::enterEdit(Device &d) {
     add("ID", c.station_id, 1, 99, 1);
     add("Volume", c.volume_pct, 0, 100, 1, "%");
     add("Setup-Snd", c.default_setup_sound, 0, cfg::SOUND_ID_MAX, 1);
-    // Wand status colors: channel mask R/G/B/W, all 15 combinations.
-    add("LED bereit", c.led_ready, 1, LED_MASK_MAX, 1, nullptr, false, true);
-    add("LED aktiv", c.led_busy, 1, LED_MASK_MAX, 1, nullptr, false, true);
   } else {
     TargetConfig c;
     decodeTargetConfig(d.info.config_blob, d.info.config_blob_len, c);
@@ -165,8 +161,6 @@ void UiController::sendCfgWrite() {
     c.station_id = (uint8_t)_fields[0].value;
     c.volume_pct = (uint8_t)_fields[1].value;
     c.default_setup_sound = (uint8_t)_fields[2].value;
-    c.led_ready = (uint8_t)_fields[3].value;
-    c.led_busy = (uint8_t)_fields[4].value;
     p.station_id = c.station_id;
     encodeStationConfig(c, p.payload);
   } else {
@@ -683,15 +677,7 @@ void UiController::render() {
                  }
                  const Field &f = ui->_fields[i];
                  char val[12];
-                 if (f.isLedMask) {
-                   // channel letters of the set dies, e.g. 0b1001 -> "RW"
-                   int k = 0;
-                   if (f.value & LED_R) val[k++] = 'R';
-                   if (f.value & LED_G) val[k++] = 'G';
-                   if (f.value & LED_B) val[k++] = 'B';
-                   if (f.value & LED_W) val[k++] = 'W';
-                   val[k] = '\0';
-                 } else if (f.isBitmask) {
+                 if (f.isBitmask) {
                    snprintf(val, sizeof(val), "%c%c%c",
                             (f.value & 1) ? '1' : '-',
                             (f.value & 2) ? '2' : '-',
@@ -702,7 +688,7 @@ void UiController::render() {
                  }
                  const bool editing =
                      ui->_valueEditing && i == ui->_cursor;
-                 snprintf(b, n, "%-10s:%s%s%s", f.label,
+                 snprintf(b, n, "%-9s:%s%s%s", f.label,
                           editing ? "[" : " ", val, editing ? "]" : "");
                },
                &ctx);

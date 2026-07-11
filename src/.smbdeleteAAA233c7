@@ -53,7 +53,6 @@ class UiController {
     int32_t value, min, max, step;
     const char *unit;   // may be nullptr
     bool isBitmask;     // render as ●○● (sw_channels)
-    bool isLedMask;     // render as channel letters "R".."RGBW" (led_ready/busy)
   };
 
   // --- live monitor ------------------------------------------------------------
