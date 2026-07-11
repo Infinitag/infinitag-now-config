@@ -106,25 +106,4 @@ class UiController {
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
 
   // setup state
-  uint32_t _setupStartedMs = 0;
-  uint32_t _lastSetupTxMs = 0;
-  char _setupResult[24] = "";
-  uint8_t _setupNewId = 1;   // id to assign, sent in the SETUP_BEGIN header
-
-  // sound test state
-  uint8_t _testSound = 0;
-
-  // self-test state (tests 1..5, results indexed test-1)
-  static constexpr uint8_t SELF_TESTS = 5;
-  char _selfResult[SELF_TESTS] = {' ', ' ', ' ', ' ', ' '};
-  uint8_t _selfRunning = 0;     // DebugTest id currently awaited, 0 = none
-  bool _selfAllMode = false;    // "Alle testen": auto-advance on result
-  uint32_t _selfDeadline = 0;
-
-  // live monitor
-  HitEntry _hits[MONITOR_RING];
-  size_t _hitCount = 0;
-
-  uint32_t _lastRenderMs = 0;
-  bool _dirty = true;
-};
+  uint32_t _setupStartedMs = 

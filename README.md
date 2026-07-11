@@ -43,7 +43,11 @@ pio device monitor                # Log ansehen
 Discovery + Geräteliste (RSSI, `??` bei ID 0, `!` bei ID-Duplikat),
 Identify-Blink (500-ms-Refresh, K3 an/aus), Feld-Editor mit CFG_WRITE →
 CFG_ACK (Timeout 800 ms), „Neue Station" (SETUP_BEGIN/SETUP_TAKE, 60 s),
-Sound-Test (0x32 `CFG_TEST_SOUND`), Live-Monitor (HIT_REPORTs), Firmware-Info.
+Sound-Test (0x32 `CFG_TEST_SOUND`), Live-Monitor (HIT_REPORTs), Firmware-Info,
+**Stations-Selbsttest** (0xF0/0xF1: Sound, LEDs, Laser, IR-Burst mit
+TSOP-Selbstcheck, Trigger – einzeln oder „Alle testen").
+Bedienung komplett **encoder-only** (jede Ebene mit „< Zurück"-Eintrag,
+schnelles Drehen = ×10); K1–K4 sind optionale Shortcuts.
 
 ## Bewusst noch offen (V0.2+)
 
