@@ -26,10 +26,12 @@ class UiController {
 
  private:
   // --- screens ---------------------------------------------------------------
+  // Device-first navigation (since 2026-07-11): pick the device from the
+  // list, THEN choose an action in its device menu (Prusa-style).
   enum Screen : uint8_t {
     SCR_MAIN,
-    SCR_STATION_MENU,
-    SCR_DEVICE_LIST,   // stations or targets, see _listType/_listPurpose
+    SCR_DEVICE_LIST,   // stations or targets, see _listType
+    SCR_DEVICE_MENU,   // actions for the selected device (_editDev)
     SCR_DEVICE_EDIT,
     SCR_SETUP_WAIT,    // "Neue Station": SETUP_BEGIN active
     SCR_SOUND_TEST,    // pick sound + fire CFG_TEST_SOUND at chosen station
@@ -39,11 +41,10 @@ class UiController {
     SCR_NOTICE,        // one-line info screen (e.g. "Web-UI ab V0.2")
   };
 
-  enum ListPurpose : uint8_t { LIST_EDIT, LIST_SOUND_TEST, LIST_SELF_TEST };
-
-  // Device lists have two static rows before the devices:
-  // row 0 = "< Zurueck", row 1 = "Neu suchen".
-  static constexpr uint8_t LIST_STATIC_ROWS = 2;
+  // Static rows before the devices in a device list:
+  // stations: 0 = "< Zurueck", 1 = "Neu suchen", 2 = "Neue Station (Stab)"
+  // targets:  0 = "< Zurueck", 1 = "Neu suchen"
+  uint8_t listStaticRows() const;
 
   // --- editing ---------------------------------------------------------------
   static constexpr size_t MAX_FIELDS = 8;
@@ -90,7 +91,6 @@ class UiController {
 
   // list state
   uint8_t _listType = 0;        // DEV_STATION / DEV_TARGET
-  ListPurpose _listPurpose = LIST_EDIT;
   bool _identifyEnabled = true;
   uint32_t _lastIdentifyMs = 0;
   uint8_t _discoverToken = 0;

@@ -14,10 +14,12 @@ static const char *MAIN_ITEMS[] = {"Stationen", "Targets", "Live-Monitor",
                                    "Web-UI", "Tools"};
 static constexpr uint8_t MAIN_COUNT = 5;
 
-static const char *STATION_ITEMS[] = {"< Zurueck", "Liste",
-                                      "Neue Station (Stab)", "Sound testen",
-                                      "Selbsttest"};
-static constexpr uint8_t STATION_COUNT = 5;
+// Device menu (after picking a device from the list)
+static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
+                                        "Sound testen", "Selbsttest"};
+static constexpr uint8_t DEVMENU_STATION_COUNT = 4;
+static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren"};
+static constexpr uint8_t DEVMENU_TARGET_COUNT = 2;
 
 // Self-test rows: 0 = back, 1 = run all, 2..6 = tests 1..5 (DebugTest ids).
 static const char *SELFTEST_ITEMS[] = {"< Zurueck",  "Alle testen",
@@ -67,6 +69,10 @@ void UiController::gotoScreen(Screen s) {
     default:
       break;
   }
+}
+
+uint8_t UiController::listStaticRows() const {
+  return _listType == DEV_STATION ? 3 : 2;
 }
 
 void UiController::startDiscovery(uint8_t deviceType) {
@@ -312,10 +318,12 @@ void UiController::handleInput() {
       if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, MAIN_COUNT - 1);
       if (push) {
         switch (_cursor) {
-          case 0: gotoScreen(SCR_STATION_MENU); break;
+          case 0:
+            _listType = DEV_STATION;
+            gotoScreen(SCR_DEVICE_LIST);
+            break;
           case 1:
             _listType = DEV_TARGET;
-            _listPurpose = LIST_EDIT;
             gotoScreen(SCR_DEVICE_LIST);
             break;
           case 2: gotoScreen(SCR_LIVE_MONITOR); break;
@@ -325,37 +333,29 @@ void UiController::handleInput() {
       }
       break;
 
-    case SCR_STATION_MENU:
-      if (delta)
-        _cursor = (uint8_t)clampVal(_cursor + delta, 0, STATION_COUNT - 1);
+    case SCR_DEVICE_MENU: {
+      const uint8_t rows = _editDev.deviceType == DEV_STATION
+                               ? DEVMENU_STATION_COUNT
+                               : DEVMENU_TARGET_COUNT;
+      if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, rows - 1);
       if (push) {
         switch (_cursor) {
-          case 0: gotoScreen(SCR_MAIN); break;  // < Zurueck
-          case 1:
-            _listType = DEV_STATION;
-            _listPurpose = LIST_EDIT;
-            gotoScreen(SCR_DEVICE_LIST);
-            break;
-          case 2: gotoScreen(SCR_SETUP_WAIT); break;
-          case 3:
-            _listType = DEV_STATION;
-            _listPurpose = LIST_SOUND_TEST;
-            gotoScreen(SCR_DEVICE_LIST);
-            break;
-          case 4:
-            _listType = DEV_STATION;
-            _listPurpose = LIST_SELF_TEST;
-            gotoScreen(SCR_DEVICE_LIST);
-            break;
+          case 0: gotoScreen(SCR_DEVICE_LIST); break;  // < Zurueck
+          case 1: enterEdit(_editDev); break;
+          case 2: gotoScreen(SCR_SOUND_TEST); break;
+          case 3: gotoScreen(SCR_SELF_TEST); break;
         }
       }
-      if (back) gotoScreen(SCR_MAIN);
+      if (back) gotoScreen(SCR_DEVICE_LIST);
       break;
+    }
 
     case SCR_DEVICE_LIST: {
-      // rows: 0 = "< Zurueck", 1 = "Neu suchen", 2.. = devices
+      // stations: 0 Zurueck, 1 Neu suchen, 2 Neue Station (Stab), 3.. devices
+      // targets:  0 Zurueck, 1 Neu suchen, 2.. devices
+      const uint8_t staticRows = listStaticRows();
       const int count = (int)_reg.count(_listType);
-      const int rows = count + LIST_STATIC_ROWS;
+      const int rows = count + staticRows;
       if (delta) {
         _cursor = (uint8_t)clampVal(_cursor + delta, 0, rows - 1);
         _lastIdentifyMs = 0;  // identify the new cursor entry immediately
@@ -364,24 +364,20 @@ void UiController::handleInput() {
       if (k2) startDiscovery(_listType);  // shortcut: manual refresh
       if (push) {
         if (_cursor == 0) {
-          gotoScreen(_listType == DEV_STATION ? SCR_STATION_MENU : SCR_MAIN);
+          gotoScreen(SCR_MAIN);
         } else if (_cursor == 1) {
           startDiscovery(_listType);
+        } else if (_listType == DEV_STATION && _cursor == 2) {
+          gotoScreen(SCR_SETUP_WAIT);  // Neue Station (Stab)
         } else {
-          Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
+          Device *d = _reg.byIndex(_listType, _cursor - staticRows);
           if (d) {
-            if (_listPurpose == LIST_EDIT) {
-              enterEdit(*d);
-            } else {
-              _editDev = *d;  // remember chosen station
-              gotoScreen(_listPurpose == LIST_SOUND_TEST ? SCR_SOUND_TEST
-                                                         : SCR_SELF_TEST);
-            }
+            _editDev = *d;
+            gotoScreen(SCR_DEVICE_MENU);
           }
         }
       }
-      if (back)
-        gotoScreen(_listType == DEV_STATION ? SCR_STATION_MENU : SCR_MAIN);
+      if (back) gotoScreen(SCR_MAIN);
       break;
     }
 
@@ -403,10 +399,10 @@ void UiController::handleInput() {
           } else if (_cursor == _fieldCount) {
             sendCfgWrite();
           } else {
-            gotoScreen(SCR_DEVICE_LIST);  // [< Zurueck]
+            gotoScreen(SCR_DEVICE_MENU);  // [< Zurueck]
           }
         }
-        if (back) gotoScreen(SCR_DEVICE_LIST);
+        if (back) gotoScreen(SCR_DEVICE_MENU);
       }
       break;
     }
@@ -417,7 +413,10 @@ void UiController::handleInput() {
         _lastSetupTxMs = 0;  // announce the new id immediately
       }
       // push = cancel while waiting / back once done; K1 identical
-      if (back || push) gotoScreen(SCR_STATION_MENU);
+      if (back || push) {
+        _listType = DEV_STATION;
+        gotoScreen(SCR_DEVICE_LIST);
+      }
       break;
 
     case SCR_SOUND_TEST: {
@@ -431,11 +430,11 @@ void UiController::handleInput() {
       } else {
         if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, 2);
         if (push) {
-          if (_cursor == 0) gotoScreen(SCR_STATION_MENU);
+          if (_cursor == 0) gotoScreen(SCR_DEVICE_MENU);
           else if (_cursor == 1) _valueEditing = true;
           else sendTestSound();
         }
-        if (back) gotoScreen(SCR_STATION_MENU);
+        if (back) gotoScreen(SCR_DEVICE_MENU);
       }
       break;
     }
@@ -445,7 +444,7 @@ void UiController::handleInput() {
                                              SELFTEST_ROWS - 1);
       if (push && _selfRunning == 0) {
         if (_cursor == 0) {
-          gotoScreen(SCR_DEVICE_LIST);  // back to the station list
+          gotoScreen(SCR_DEVICE_MENU);
         } else if (_cursor == 1) {
           for (uint8_t i = 0; i < SELF_TESTS; i++) _selfResult[i] = ' ';
           _selfAllMode = true;
@@ -460,7 +459,7 @@ void UiController::handleInput() {
         // but we leave the screen deliberately).
         _selfRunning = 0;
         _selfAllMode = false;
-        gotoScreen(SCR_DEVICE_LIST);
+        gotoScreen(SCR_DEVICE_MENU);
       }
       break;
     }
@@ -480,13 +479,17 @@ void UiController::handleInput() {
 void UiController::handleTimers() {
   const uint32_t now = millis();
 
-  // identify blink refresh (Doc 18 §7) – only on real device rows
-  if (_screen == SCR_DEVICE_LIST && _identifyEnabled &&
-      _cursor >= LIST_STATIC_ROWS &&
-      now - _lastIdentifyMs >= cfg::IDENTIFY_PERIOD_MS) {
-    Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
-    if (d) sendIdentify(*d);
-    _lastIdentifyMs = now;
+  // identify blink refresh (Doc 18 §7) – on device rows in the list and
+  // while the device menu is open (so you always see WHICH device it is)
+  if (_identifyEnabled && now - _lastIdentifyMs >= cfg::IDENTIFY_PERIOD_MS) {
+    if (_screen == SCR_DEVICE_LIST && _cursor >= listStaticRows()) {
+      Device *d = _reg.byIndex(_listType, _cursor - listStaticRows());
+      if (d) sendIdentify(*d);
+      _lastIdentifyMs = now;
+    } else if (_screen == SCR_DEVICE_MENU) {
+      sendIdentify(_editDev);
+      _lastIdentifyMs = now;
+    }
   }
 
   // setup mode: rebroadcast + timeout (Doc 18 §8)
@@ -591,10 +594,24 @@ void UiController::render() {
       break;
     }
 
-    case SCR_STATION_MENU: {
-      drawTitle("Stationen");
-      struct Ctx { const char **items; } ctx{STATION_ITEMS};
-      drawRows(_oled, _cursor, STATION_COUNT,
+    case SCR_DEVICE_MENU: {
+      char title[24];
+      char mac[7];
+      macSuffix(_editDev.mac, mac);
+      if (_editDev.id == 0)
+        snprintf(title, sizeof(title), "%s ?? %s",
+                 _editDev.deviceType == DEV_STATION ? "Station" : "Target",
+                 mac);
+      else
+        snprintf(title, sizeof(title), "%s %02u %s",
+                 _editDev.deviceType == DEV_STATION ? "Station" : "Target",
+                 _editDev.id, mac);
+      drawTitle(title);
+      const bool st = _editDev.deviceType == DEV_STATION;
+      struct Ctx { const char **items; } ctx{st ? DEVMENU_STATION
+                                               : DEVMENU_TARGET};
+      drawRows(_oled, _cursor,
+               st ? DEVMENU_STATION_COUNT : DEVMENU_TARGET_COUNT,
                [](void *c, int i, char *b, size_t n) {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
@@ -604,24 +621,24 @@ void UiController::render() {
 
     case SCR_DEVICE_LIST: {
       const int count = (int)_reg.count(_listType);
-      const char *title;
-      if (_listPurpose == LIST_SOUND_TEST) title = "Sound-Test: Wahl";
-      else if (_listPurpose == LIST_SELF_TEST) title = "Selbsttest: Wahl";
-      else title = _listType == DEV_STATION ? "Stationen: Liste"
-                                            : "Targets: Liste";
-      drawTitle(title, count);
+      drawTitle(_listType == DEV_STATION ? "Stationen" : "Targets", count);
 
       struct Ctx {
         UiController *ui;
         uint8_t type;
-      } ctx{this, _listType};
-      drawRows(_oled, _cursor, count + LIST_STATIC_ROWS,
+        uint8_t staticRows;
+      } ctx{this, _listType, listStaticRows()};
+      drawRows(_oled, _cursor, count + listStaticRows(),
                [](void *c, int i, char *b, size_t n) {
                  Ctx *x = (Ctx *)c;
                  if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
                  if (i == 1) { snprintf(b, n, "Neu suchen"); return; }
+                 if (x->staticRows == 3 && i == 2) {
+                   snprintf(b, n, "Neue Station (Stab)");
+                   return;
+                 }
                  Device *d = x->ui->_reg.byIndex(x->type,
-                                                 i - LIST_STATIC_ROWS);
+                                                 i - x->staticRows);
                  if (!d) { b[0] = '\0'; return; }
                  char mac[7];
                  x->ui->macSuffix(d->mac, mac);
