@@ -13,8 +13,4 @@ build_flags =
     -Wall
 lib_deps =
     olikraus/U8g2@^2.35.30
-    ; Core-Lib als Symlink auf die lokale Arbeitskopie: immer aktueller
-    ; Stand, kein Cache-Drift, kein Push noetig. Fuer Builds ausserhalb
-    ; des NAS-Setups stattdessen den Tag pinnen:
-    ;   https://github.com/Infinitag/infinitag-now-core.git#v2.0.0
-    symlink:///Volumes/Basteln/Infinitag/repos/infinitag-now-core
+    https://github.com/Infinitag/infinitag-now-core.git

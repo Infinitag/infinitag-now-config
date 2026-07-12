@@ -16,10 +16,16 @@ static constexpr uint8_t MAIN_COUNT = 5;
 
 // Device menu (after picking a device from the list)
 static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
-                                        "Sound testen", "Selbsttest"};
-static constexpr uint8_t DEVMENU_STATION_COUNT = 4;
-static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren"};
-static constexpr uint8_t DEVMENU_TARGET_COUNT = 2;
+                                        "Sound testen", "Selbsttest",
+                                        "Update (OTA)"};
+static constexpr uint8_t DEVMENU_STATION_COUNT = 5;
+static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
+                                       "Update (OTA)"};
+static constexpr uint8_t DEVMENU_TARGET_COUNT = 3;
+
+static const char *TOOLS_ITEMS[] = {"< Zurueck", "Firmware-Info",
+                                    "Update-Modus"};
+static constexpr uint8_t TOOLS_COUNT = 3;
 
 // Self-test rows: 0 = back, 1 = run all, 2..6 = tests 1..5 (DebugTest ids).
 static const char *SELFTEST_ITEMS[] = {"< Zurueck",  "Alle testen",
@@ -58,21 +64,20 @@ void UiController::gotoScreen(Screen s) {
     case SCR_DEVICE_LIST:
       startDiscovery(_listType);
       break;
-    case SCR_SETUP_WAIT:
-      beginSetupMode();
-      break;
     case SCR_SELF_TEST:
       for (uint8_t i = 0; i < SELF_TESTS; i++) _selfResult[i] = ' ';
       _selfRunning = 0;
       _selfAllMode = false;
       break;
+    case SCR_DEV_UPDATE:
+      beginDeviceUpdate();
+      break;
+    case SCR_SELF_UPDATE:
+      beginSelfUpdate();
+      break;
     default:
       break;
   }
-}
-
-uint8_t UiController::listStaticRows() const {
-  return _listType == DEV_STATION ? 3 : 2;
 }
 
 void UiController::startDiscovery(uint8_t deviceType) {
@@ -83,32 +88,15 @@ void UiController::startDiscovery(uint8_t deviceType) {
   Packet p;
   init(p, MSG_DISCOVER_REQ, DEV_CONFIG_BOX);  // header type = sender type
   p.token = _discoverToken;
-  p.payload[0] = deviceType;  // filter (Doc 12 §3.5)
+  p.payload[0] = deviceType;
   _net.sendBroadcast(p);
 }
 
 void UiController::sendIdentify(const Device &d) {
   Packet p;
   init(p, MSG_IDENTIFY, d.deviceType);
-  if (d.deviceType == DEV_STATION) p.station_id = d.id;
-  if (d.deviceType == DEV_TARGET) p.target_id = d.id;
   p.payload[0] = cfg::IDENTIFY_DURATION_100MS;
-  Packet copy = p;
-  _net.send(d.mac, copy);
-}
-
-void UiController::beginSetupMode() {
-  _setupStartedMs = millis();
-  _lastSetupTxMs = 0;  // forces immediate send in handleTimers()
-  _setupResult[0] = '\0';
-  // Suggest the next free station id based on the last discovery cycle.
-  uint8_t maxId = 0;
-  for (size_t i = 0;; i++) {
-    Device *d = _reg.byIndex(DEV_STATION, i);
-    if (!d) break;
-    if (d->id > maxId) maxId = d->id;
-  }
-  _setupNewId = (maxId < 99) ? (uint8_t)(maxId + 1) : 99;
+  _net.send(d.mac, p);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,31 +110,57 @@ void UiController::enterEdit(Device &d) {
   _awaitingAck = false;
 
   auto add = [&](const char *label, int32_t val, int32_t mn, int32_t mx,
-                 int32_t st, const char *unit = nullptr, bool bits = false,
-                 bool led = false) {
+                 int32_t st, const char *unit = nullptr,
+                 FieldFmt fmt = FMT_NUM) {
     if (_fieldCount >= MAX_FIELDS) return;
-    _fields[_fieldCount++] = Field{label, val, mn, mx, st, unit, bits, led};
+    _fields[_fieldCount++] = Field{label, val, mn, mx, st, unit, fmt};
   };
 
   if (d.deviceType == DEV_STATION) {
     StationConfig c;
     decodeStationConfig(d.info.config_blob, d.info.config_blob_len, c);
-    add("ID", c.station_id, 1, 99, 1);
     add("Volume", c.volume_pct, 0, 100, 1, "%");
-    add("Setup-Snd", c.default_setup_sound, 0, cfg::SOUND_ID_MAX, 1);
     // Wand status colors: channel mask R/G/B/W, all 15 combinations.
-    add("LED bereit", c.led_ready, 1, LED_MASK_MAX, 1, nullptr, false, true);
-    add("LED aktiv", c.led_busy, 1, LED_MASK_MAX, 1, nullptr, false, true);
+    add("LED bereit", c.led_ready, 1, LED_MASK_MAX, 1, nullptr, FMT_LED);
+    add("LED aktiv", c.led_busy, 1, LED_MASK_MAX, 1, nullptr, FMT_LED);
   } else {
     TargetConfig c;
     decodeTargetConfig(d.info.config_blob, d.info.config_blob_len, c);
-    add("Target-ID", c.target_id, 1, 99, 1);
-    add("Station", c.station_id, 1, 99, 1);
+
+    // Build the station pick list: all discovered stations, plus the MAC
+    // currently stored in the target if it is set but not (re)discovered.
+    _staPickCount = 0;
+    int32_t current = 0;
+    for (size_t i = 0; _staPickCount < MAX_STA_PICK; i++) {
+      Device *s = _reg.byIndex(DEV_STATION, i);
+      if (!s) break;
+      memcpy(_staPick[_staPickCount], s->mac, 6);
+      if (memcmp(s->mac, c.station_mac, 6) == 0) current = _staPickCount;
+      _staPickCount++;
+    }
+    static const uint8_t ZERO_MAC[6] = {0};
+    const bool stored = memcmp(c.station_mac, ZERO_MAC, 6) != 0;
+    if (stored && _staPickCount < MAX_STA_PICK) {
+      bool known = false;
+      for (uint8_t i = 0; i < _staPickCount; i++)
+        if (memcmp(_staPick[i], c.station_mac, 6) == 0) {
+          known = true;
+          current = i;
+        }
+      if (!known) {
+        memcpy(_staPick[_staPickCount], c.station_mac, 6);
+        current = _staPickCount;
+        _staPickCount++;
+      }
+    }
+
+    add("Station", current, 0,
+        _staPickCount > 0 ? _staPickCount - 1 : 0, 1, nullptr, FMT_STATION);
     add("Sound", c.sound_id, 0, cfg::SOUND_ID_MAX, 1);
     add("Hit-Time", c.hit_time_ms, 100, 60000, 100, "ms");
     add("Cooldown", c.cooldown_ms, 0, 60000, 100, "ms");
     add("SW-Anim", c.sw_animation, 0, 1, 1);
-    add("SW-Kanal", c.sw_channels, 0, 7, 1, nullptr, true);
+    add("SW-Kanal", c.sw_channels, 0, 7, 1, nullptr, FMT_BITS);
   }
   gotoScreen(SCR_DEVICE_EDIT);
 }
@@ -162,24 +176,19 @@ void UiController::sendCfgWrite() {
 
   if (_editDev.deviceType == DEV_STATION) {
     StationConfig c;
-    c.station_id = (uint8_t)_fields[0].value;
-    c.volume_pct = (uint8_t)_fields[1].value;
-    c.default_setup_sound = (uint8_t)_fields[2].value;
-    c.led_ready = (uint8_t)_fields[3].value;
-    c.led_busy = (uint8_t)_fields[4].value;
-    p.station_id = c.station_id;
+    c.volume_pct = (uint8_t)_fields[0].value;
+    c.led_ready = (uint8_t)_fields[1].value;
+    c.led_busy = (uint8_t)_fields[2].value;
     encodeStationConfig(c, p.payload);
   } else {
     TargetConfig c;
-    c.target_id = (uint8_t)_fields[0].value;
-    c.station_id = (uint8_t)_fields[1].value;
-    c.sound_id = (uint8_t)_fields[2].value;
-    c.hit_time_ms = (uint16_t)_fields[3].value;
-    c.cooldown_ms = (uint16_t)_fields[4].value;
-    c.sw_animation = (uint8_t)_fields[5].value;
-    c.sw_channels = (uint8_t)_fields[6].value;
-    p.target_id = c.target_id;
-    p.station_id = c.station_id;
+    if (_staPickCount > 0)
+      memcpy(c.station_mac, _staPick[_fields[0].value], 6);
+    c.sound_id = (uint8_t)_fields[1].value;
+    c.hit_time_ms = (uint16_t)_fields[2].value;
+    c.cooldown_ms = (uint16_t)_fields[3].value;
+    c.sw_animation = (uint8_t)_fields[4].value;
+    c.sw_channels = (uint8_t)_fields[5].value;
     encodeTargetConfig(c, p.payload);
   }
 
@@ -196,7 +205,6 @@ void UiController::sendCfgWrite() {
 void UiController::sendTestSound() {
   Packet p;
   init(p, MSG_CFG_TEST_SOUND, DEV_STATION);
-  p.station_id = _editDev.id;
   p.payload[0] = _testSound;
   _net.send(_editDev.mac, p);
 }
@@ -217,6 +225,61 @@ void UiController::runSelfTest(uint8_t test) {
     _selfAllMode = false;
   }
   _dirty = true;
+}
+
+void UiController::beginDeviceUpdate() {
+  Packet p;
+  init(p, MSG_UPDATE_BEGIN, _editDev.deviceType);
+  p.payload[0] = cfg::UPDATE_TIMEOUT_MIN;
+  if (_net.send(_editDev.mac, p)) {
+    _updState = UPD_WAIT_ACK;
+    _updAckDeadline = millis() + cfg::UPDATE_ACK_TIMEOUT_MS;
+  } else {
+    _updState = UPD_NO_ACK;
+  }
+}
+
+float UiController::readVbat() const {
+  // average 8 samples: the 100k/22k divider is high-impedance for the
+  // ADC sample cap; a 100 nF cap at GPIO3 fixes the systematic droop,
+  // averaging smooths the rest
+  uint32_t mvAcc = 0;
+  for (int i = 0; i < 8; i++) mvAcc += analogReadMilliVolts(cfg::PIN_VBAT);
+  return (mvAcc / 8) * cfg::VBAT_DIVIDER / 1000.0f;
+}
+
+void UiController::beginSelfUpdate() {
+  // Battery gate: never start flashing on a nearly empty pack. Readings
+  // below 3.0 V mean "no battery / USB powered" and are fine.
+  const float vbat = readVbat();
+  if (vbat > 3.0f && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
+    _selfUpd = SELFUPD_REFUSED;
+    return;
+  }
+
+  const uint8_t *m = _net.ownMac();
+  snprintf(_selfUpdAp, sizeof(_selfUpdAp), "infinitag-cfg-%02X%02X%02X", m[3],
+           m[4], m[5]);
+  char ver[16];
+  snprintf(ver, sizeof(ver), "%u.%u.%u", cfg::FW_MAJOR, cfg::FW_MINOR,
+           cfg::FW_PATCH);
+
+  // Tears down ESP-NOW; the only way back to normal operation is a reboot.
+  if (_webUpd.begin(_selfUpdAp, ver)) {
+    _selfUpd = SELFUPD_ACTIVE;
+    _selfUpdDeadline = millis() + cfg::SELF_UPDATE_TIMEOUT_MS;
+  } else {
+    ESP.restart();  // radio state is undefined now – restart cleanly
+  }
+}
+
+// ---------------------------------------------------------------------------
+// version check ('^' marker in the device lists)
+// ---------------------------------------------------------------------------
+
+bool UiController::isOutdated(const Device &d) const {
+  return DeviceRegistry::versionKey(d.info) <
+         _reg.maxVersionKey(d.deviceType);
 }
 
 // ---------------------------------------------------------------------------
@@ -275,10 +338,10 @@ void UiController::onPacket(const RxPacket &rx) {
       }
       break;
 
-    case MSG_SETUP_TAKE:
-      if (_screen == SCR_SETUP_WAIT && _setupResult[0] == '\0') {
-        snprintf(_setupResult, sizeof(_setupResult), "Station %02u gesetzt",
-                 p.payload[0]);
+    case MSG_UPDATE_ACK:
+      if (_screen == SCR_DEV_UPDATE && _updState == UPD_WAIT_ACK &&
+          memcmp(rx.mac, _editDev.mac, 6) == 0) {
+        _updState = UPD_ACTIVE;
         _dirty = true;
       }
       break;
@@ -286,8 +349,10 @@ void UiController::onPacket(const RxPacket &rx) {
     case MSG_HIT_REPORT: {
       // ring buffer, newest first
       for (size_t i = MONITOR_RING - 1; i > 0; i--) _hits[i] = _hits[i - 1];
-      _hits[0] = HitEntry{(uint32_t)millis(), p.target_id, p.station_id,
-                          p.payload[0]};
+      HitEntry &h = _hits[0];
+      h.ms = millis();
+      memcpy(h.targetMac, rx.mac, 6);
+      decodeHitReport(p.payload, h.stationMac, h.soundId);
       if (_hitCount < MONITOR_RING) _hitCount++;
       if (_screen == SCR_LIVE_MONITOR) _dirty = true;
       break;
@@ -334,7 +399,7 @@ void UiController::handleInput() {
             break;
           case 2: gotoScreen(SCR_LIVE_MONITOR); break;
           case 3: gotoScreen(SCR_NOTICE); break;  // Web-UI ab V0.2
-          case 4: gotoScreen(SCR_TOOLS_INFO); break;
+          case 4: gotoScreen(SCR_TOOLS_MENU); break;
         }
       }
       break;
@@ -345,11 +410,20 @@ void UiController::handleInput() {
                                : DEVMENU_TARGET_COUNT;
       if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, rows - 1);
       if (push) {
-        switch (_cursor) {
-          case 0: gotoScreen(SCR_DEVICE_LIST); break;  // < Zurueck
-          case 1: enterEdit(_editDev); break;
-          case 2: gotoScreen(SCR_SOUND_TEST); break;
-          case 3: gotoScreen(SCR_SELF_TEST); break;
+        if (_editDev.deviceType == DEV_STATION) {
+          switch (_cursor) {
+            case 0: gotoScreen(SCR_DEVICE_LIST); break;  // < Zurueck
+            case 1: enterEdit(_editDev); break;
+            case 2: gotoScreen(SCR_SOUND_TEST); break;
+            case 3: gotoScreen(SCR_SELF_TEST); break;
+            case 4: gotoScreen(SCR_DEV_UPDATE); break;
+          }
+        } else {
+          switch (_cursor) {
+            case 0: gotoScreen(SCR_DEVICE_LIST); break;
+            case 1: enterEdit(_editDev); break;
+            case 2: gotoScreen(SCR_DEV_UPDATE); break;
+          }
         }
       }
       if (back) gotoScreen(SCR_DEVICE_LIST);
@@ -357,11 +431,9 @@ void UiController::handleInput() {
     }
 
     case SCR_DEVICE_LIST: {
-      // stations: 0 Zurueck, 1 Neu suchen, 2 Neue Station (Stab), 3.. devices
-      // targets:  0 Zurueck, 1 Neu suchen, 2.. devices
-      const uint8_t staticRows = listStaticRows();
+      // rows: 0 = "< Zurueck", 1 = "Neu suchen", 2.. = devices
       const int count = (int)_reg.count(_listType);
-      const int rows = count + staticRows;
+      const int rows = count + LIST_STATIC_ROWS;
       if (delta) {
         _cursor = (uint8_t)clampVal(_cursor + delta, 0, rows - 1);
         _lastIdentifyMs = 0;  // identify the new cursor entry immediately
@@ -373,10 +445,8 @@ void UiController::handleInput() {
           gotoScreen(SCR_MAIN);
         } else if (_cursor == 1) {
           startDiscovery(_listType);
-        } else if (_listType == DEV_STATION && _cursor == 2) {
-          gotoScreen(SCR_SETUP_WAIT);  // Neue Station (Stab)
         } else {
-          Device *d = _reg.byIndex(_listType, _cursor - staticRows);
+          Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
           if (d) {
             _editDev = *d;
             gotoScreen(SCR_DEVICE_MENU);
@@ -412,18 +482,6 @@ void UiController::handleInput() {
       }
       break;
     }
-
-    case SCR_SETUP_WAIT:
-      if (delta && _setupResult[0] == '\0') {
-        _setupNewId = (uint8_t)clampVal(_setupNewId + delta * stepMul, 1, 99);
-        _lastSetupTxMs = 0;  // announce the new id immediately
-      }
-      // push = cancel while waiting / back once done; K1 identical
-      if (back || push) {
-        _listType = DEV_STATION;
-        gotoScreen(SCR_DEVICE_LIST);
-      }
-      break;
 
     case SCR_SOUND_TEST: {
       // rows: 0 = "< Zurueck", 1 = "Sound: [xx]", 2 = "[Abspielen]"
@@ -470,6 +528,37 @@ void UiController::handleInput() {
       break;
     }
 
+    case SCR_DEV_UPDATE:
+      // The device is in (or on its way into) its SoftAP mode and off the
+      // air – back to the list; a later rescan shows it after its reboot.
+      if (back || push) gotoScreen(SCR_DEVICE_LIST);
+      break;
+
+    case SCR_TOOLS_MENU:
+      if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0,
+                                             TOOLS_COUNT - 1);
+      if (push) {
+        switch (_cursor) {
+          case 0: gotoScreen(SCR_MAIN); break;
+          case 1: gotoScreen(SCR_TOOLS_INFO); break;
+          case 2: gotoScreen(SCR_SELF_UPDATE); break;
+        }
+      }
+      if (back) gotoScreen(SCR_MAIN);
+      break;
+
+    case SCR_SELF_UPDATE:
+      if (_selfUpd == SELFUPD_REFUSED) {
+        if (back || push) {
+          _selfUpd = SELFUPD_OFF;
+          gotoScreen(SCR_TOOLS_MENU);
+        }
+      } else if (back) {
+        // ESP-NOW is torn down – a clean reboot is the only way back.
+        ESP.restart();
+      }
+      break;
+
     case SCR_LIVE_MONITOR:
     case SCR_TOOLS_INFO:
     case SCR_NOTICE:
@@ -488,29 +577,13 @@ void UiController::handleTimers() {
   // identify blink refresh (Doc 18 §7) – on device rows in the list and
   // while the device menu is open (so you always see WHICH device it is)
   if (_identifyEnabled && now - _lastIdentifyMs >= cfg::IDENTIFY_PERIOD_MS) {
-    if (_screen == SCR_DEVICE_LIST && _cursor >= listStaticRows()) {
-      Device *d = _reg.byIndex(_listType, _cursor - listStaticRows());
+    if (_screen == SCR_DEVICE_LIST && _cursor >= LIST_STATIC_ROWS) {
+      Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
       if (d) sendIdentify(*d);
       _lastIdentifyMs = now;
     } else if (_screen == SCR_DEVICE_MENU) {
       sendIdentify(_editDev);
       _lastIdentifyMs = now;
-    }
-  }
-
-  // setup mode: rebroadcast + timeout (Doc 18 §8)
-  if (_screen == SCR_SETUP_WAIT && _setupResult[0] == '\0') {
-    if (now - _lastSetupTxMs >= cfg::SETUP_REBROADCAST_MS) {
-      Packet p;
-      init(p, MSG_SETUP_BEGIN, DEV_STATION);
-      p.station_id = _setupNewId;  // id to assign (protocol note 2026-07-11)
-      p.payload[0] = cfg::SETUP_TIMEOUT_S;
-      _net.sendBroadcast(p);
-      _lastSetupTxMs = now;
-    }
-    if (now - _setupStartedMs >= (uint32_t)cfg::SETUP_TIMEOUT_S * 1000UL) {
-      snprintf(_setupResult, sizeof(_setupResult), "Timeout!");
-      _dirty = true;
     }
   }
 
@@ -521,12 +594,31 @@ void UiController::handleTimers() {
     _dirty = true;
   }
 
+  // UPDATE_BEGIN -> UPDATE_ACK timeout
+  if (_screen == SCR_DEV_UPDATE && _updState == UPD_WAIT_ACK &&
+      now >= _updAckDeadline) {
+    _updState = UPD_NO_ACK;
+    _dirty = true;
+  }
+
   // self-test: no DEBUG_RESULT within the deadline
   if (_selfRunning != 0 && now >= _selfDeadline) {
     _selfResult[_selfRunning - 1] = '?';  // keine Antwort
     _selfRunning = 0;
     _selfAllMode = false;
     _dirty = true;
+  }
+
+  // own update mode: service HTTP, reboot on success/timeout
+  if (_selfUpd == SELFUPD_ACTIVE) {
+    _webUpd.loop();
+    if (_webUpd.updateDone()) {
+      render();  // one last "OK" frame
+      delay(1500);  // let the browser receive the response page
+      ESP.restart();
+    }
+    if (now >= _selfUpdDeadline && !_webUpd.uploadActive()) ESP.restart();
+    _dirty = true;  // keep the client counter fresh
   }
 
   // live monitor ages change the displayed seconds
@@ -551,6 +643,13 @@ void UiController::tick() {
 
 void UiController::macSuffix(const uint8_t mac[6], char *out) {
   snprintf(out, 7, "%02X%02X%02X", mac[3], mac[4], mac[5]);
+}
+
+void UiController::apName(char *out, size_t n, const Device &d) const {
+  char mac[7];
+  macSuffix(d.mac, mac);
+  snprintf(out, n, "infinitag-%s-%s",
+           d.deviceType == DEV_STATION ? "sta" : "tgt", mac);
 }
 
 // Two-color panel: rows 0..15 are yellow, rows 16..63 are blue. The title
@@ -601,17 +700,14 @@ void UiController::render() {
     }
 
     case SCR_DEVICE_MENU: {
+      // Title: type, MAC suffix and firmware version of the device.
       char title[24];
       char mac[7];
       macSuffix(_editDev.mac, mac);
-      if (_editDev.id == 0)
-        snprintf(title, sizeof(title), "%s ?? %s",
-                 _editDev.deviceType == DEV_STATION ? "Station" : "Target",
-                 mac);
-      else
-        snprintf(title, sizeof(title), "%s %02u %s",
-                 _editDev.deviceType == DEV_STATION ? "Station" : "Target",
-                 _editDev.id, mac);
+      snprintf(title, sizeof(title), "%s %s v%u.%u.%u",
+               _editDev.deviceType == DEV_STATION ? "Station" : "Target", mac,
+               _editDev.info.fw_major, _editDev.info.fw_minor,
+               _editDev.info.fw_patch);
       drawTitle(title);
       const bool st = _editDev.deviceType == DEV_STATION;
       struct Ctx { const char **items; } ctx{st ? DEVMENU_STATION
@@ -632,28 +728,21 @@ void UiController::render() {
       struct Ctx {
         UiController *ui;
         uint8_t type;
-        uint8_t staticRows;
-      } ctx{this, _listType, listStaticRows()};
-      drawRows(_oled, _cursor, count + listStaticRows(),
+      } ctx{this, _listType};
+      drawRows(_oled, _cursor, count + LIST_STATIC_ROWS,
                [](void *c, int i, char *b, size_t n) {
                  Ctx *x = (Ctx *)c;
                  if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
                  if (i == 1) { snprintf(b, n, "Neu suchen"); return; }
-                 if (x->staticRows == 3 && i == 2) {
-                   snprintf(b, n, "Neue Station (Stab)");
-                   return;
-                 }
                  Device *d = x->ui->_reg.byIndex(x->type,
-                                                 i - x->staticRows);
+                                                 i - LIST_STATIC_ROWS);
                  if (!d) { b[0] = '\0'; return; }
                  char mac[7];
-                 x->ui->macSuffix(d->mac, mac);
-                 char idBuf[4];
-                 if (d->id == 0) snprintf(idBuf, sizeof(idBuf), "??");
-                 else snprintf(idBuf, sizeof(idBuf), "%02u", d->id);
-                 snprintf(b, n, "%s%s %s %4ddBm",
-                          x->ui->_reg.isDuplicateId(*d) ? "!" : "", idBuf,
-                          mac, d->info.rssi_self);
+                 macSuffix(d->mac, mac);
+                 // '^' = a newer firmware of this type exists in the list
+                 snprintf(b, n, "%s%s %4ddBm",
+                          x->ui->isOutdated(*d) ? "^" : " ", mac,
+                          d->info.rssi_self);
                },
                &ctx);
       if (count == 0) drawFooter("suche Geraete...");
@@ -683,22 +772,34 @@ void UiController::render() {
                  }
                  const Field &f = ui->_fields[i];
                  char val[12];
-                 if (f.isLedMask) {
-                   // channel letters of the set dies, e.g. 0b1001 -> "RW"
-                   int k = 0;
-                   if (f.value & LED_R) val[k++] = 'R';
-                   if (f.value & LED_G) val[k++] = 'G';
-                   if (f.value & LED_B) val[k++] = 'B';
-                   if (f.value & LED_W) val[k++] = 'W';
-                   val[k] = '\0';
-                 } else if (f.isBitmask) {
-                   snprintf(val, sizeof(val), "%c%c%c",
-                            (f.value & 1) ? '1' : '-',
-                            (f.value & 2) ? '2' : '-',
-                            (f.value & 4) ? '3' : '-');
-                 } else {
-                   snprintf(val, sizeof(val), "%ld%s", (long)f.value,
-                            f.unit ? f.unit : "");
+                 switch (f.fmt) {
+                   case FMT_LED: {
+                     // channel letters of the set dies, e.g. 0b1001 -> "RW"
+                     int k = 0;
+                     if (f.value & LED_R) val[k++] = 'R';
+                     if (f.value & LED_G) val[k++] = 'G';
+                     if (f.value & LED_B) val[k++] = 'B';
+                     if (f.value & LED_W) val[k++] = 'W';
+                     val[k] = '\0';
+                     break;
+                   }
+                   case FMT_BITS:
+                     snprintf(val, sizeof(val), "%c%c%c",
+                              (f.value & 1) ? '1' : '-',
+                              (f.value & 2) ? '2' : '-',
+                              (f.value & 4) ? '3' : '-');
+                     break;
+                   case FMT_STATION:
+                     if (ui->_staPickCount == 0) {
+                       snprintf(val, sizeof(val), "--");
+                     } else {
+                       macSuffix(ui->_staPick[f.value], val);
+                     }
+                     break;
+                   default:
+                     snprintf(val, sizeof(val), "%ld%s", (long)f.value,
+                              f.unit ? f.unit : "");
+                     break;
                  }
                  const bool editing =
                      ui->_valueEditing && i == ui->_cursor;
@@ -712,24 +813,11 @@ void UiController::render() {
       break;
     }
 
-    case SCR_SETUP_WAIT:
-      drawTitle("Neue Station");
-      if (_setupResult[0] == '\0') {
-        char idLine[24];
-        snprintf(idLine, sizeof(idLine), "Vergebe ID: %02u", _setupNewId);
-        _oled.drawStr(0, 26, idLine);
-        _oled.drawStr(0, 38, "Drehen  = ID aendern");
-        _oled.drawStr(0, 48, "Trigger = zuweisen");
-        drawFooter("Push = Abbrechen");
-      } else {
-        _oled.drawStr(0, 36, _setupResult);
-        drawFooter("Push = Zurueck");
-      }
-      break;
-
     case SCR_SOUND_TEST: {
       char title[24];
-      snprintf(title, sizeof(title), "Sound-Test St.%02u", _editDev.id);
+      char mac[7];
+      macSuffix(_editDev.mac, mac);
+      snprintf(title, sizeof(title), "Sound-Test %s", mac);
       drawTitle(title);
       struct Ctx { UiController *ui; } ctx{this};
       drawRows(_oled, _cursor, 3,
@@ -750,7 +838,9 @@ void UiController::render() {
 
     case SCR_SELF_TEST: {
       char title[24];
-      snprintf(title, sizeof(title), "Selbsttest St.%02u", _editDev.id);
+      char mac[7];
+      macSuffix(_editDev.mac, mac);
+      snprintf(title, sizeof(title), "Selbsttest %s", mac);
       drawTitle(title);
       struct Ctx { UiController *ui; } ctx{this};
       drawRows(_oled, _cursor, SELFTEST_ROWS,
@@ -775,6 +865,62 @@ void UiController::render() {
       break;
     }
 
+    case SCR_DEV_UPDATE: {
+      drawTitle("Firmware-Update");
+      char ap[32];
+      apName(ap, sizeof(ap), _editDev);
+      switch (_updState) {
+        case UPD_WAIT_ACK:
+          _oled.drawStr(0, 30, "Sende Kommando...");
+          break;
+        case UPD_NO_ACK:
+          _oled.drawStr(0, 30, "Keine Antwort!");
+          drawFooter("Push = Zurueck");
+          break;
+        case UPD_ACTIVE:
+          _oled.drawStr(0, 24, "Geraet im Update-Modus");
+          _oled.drawStr(0, 36, "WLAN:");
+          _oled.drawStr(0, 46, ap);
+          _oled.drawStr(0, 56, "http://192.168.4.1");
+          break;
+      }
+      break;
+    }
+
+    case SCR_TOOLS_MENU: {
+      drawTitle("Tools");
+      struct Ctx { const char **items; } ctx{TOOLS_ITEMS};
+      drawRows(_oled, _cursor, TOOLS_COUNT,
+               [](void *c, int i, char *b, size_t n) {
+                 snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
+               },
+               &ctx);
+      break;
+    }
+
+    case SCR_SELF_UPDATE: {
+      drawTitle("Update-Modus");
+      if (_selfUpd == SELFUPD_REFUSED) {
+        _oled.drawStr(0, 30, "Akku zu leer!");
+        _oled.drawStr(0, 42, "(min. 3.6 V oder USB)");
+        drawFooter("Push = Zurueck");
+      } else if (_webUpd.updateDone()) {
+        _oled.drawStr(0, 36, "Update OK - Neustart");
+      } else {
+        _oled.drawStr(0, 24, _selfUpdAp);
+        _oled.drawStr(0, 36, "http://192.168.4.1");
+        char buf[24];
+        if (_webUpd.uploadActive()) {
+          snprintf(buf, sizeof(buf), "Upload laeuft...");
+        } else {
+          snprintf(buf, sizeof(buf), "Clients: %d", _webUpd.clientCount());
+        }
+        _oled.drawStr(0, 48, buf);
+        drawFooter("K1 = Abbruch (Reboot)");
+      }
+      break;
+    }
+
     case SCR_LIVE_MONITOR: {
       drawTitle("Live-Monitor", (int)_hitCount);
       if (_hitCount == 0) {
@@ -786,9 +932,12 @@ void UiController::render() {
                    UiController *ui = ((Ctx *)c)->ui;
                    const HitEntry &h = ui->_hits[i];
                    const uint32_t age = (millis() - h.ms) / 1000;
-                   snprintf(b, n, "%3lus T%02u>S%02u snd=%02u",
-                            (unsigned long)(age > 999 ? 999 : age),
-                            h.targetId, h.stationId, h.soundId);
+                   char tgt[7], sta[7];
+                   macSuffix(h.targetMac, tgt);
+                   macSuffix(h.stationMac, sta);
+                   snprintf(b, n, "%3lus %s>%s %02u",
+                            (unsigned long)(age > 999 ? 999 : age), tgt, sta,
+                            h.soundId);
                  },
                  &ctx);
       }
@@ -809,13 +958,7 @@ void UiController::render() {
       snprintf(buf, sizeof(buf), "Heap %lu B",
                (unsigned long)ESP.getFreeHeap());
       _oled.drawStr(0, 44, buf);
-      // average 8 samples: the 100k/22k divider is high-impedance for the
-      // ADC sample cap; a 100 nF cap at GPIO3 fixes the systematic droop,
-      // averaging smooths the rest
-      uint32_t mvAcc = 0;
-      for (int i = 0; i < 8; i++) mvAcc += analogReadMilliVolts(cfg::PIN_VBAT);
-      const uint32_t mv = mvAcc / 8;
-      const float vbat = mv * cfg::VBAT_DIVIDER / 1000.0f;
+      const float vbat = readVbat();
       if (vbat > 3.0f) {
         snprintf(buf, sizeof(buf), "Up %lumin Batt %.2fV",
                  (unsigned long)(millis() / 60000UL), (double)vbat);

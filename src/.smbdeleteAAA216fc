@@ -20,6 +20,8 @@ void DeviceRegistry::upsert(const uint8_t mac[6], const inow::Packet &pkt) {
   slot->used = true;
   memcpy(slot->mac, mac, 6);
   slot->deviceType = pkt.device_type;
+  slot->id = (pkt.device_type == inow::DEV_STATION) ? pkt.station_id
+                                                    : pkt.target_id;
   inow::decodeDiscoverReply(pkt.payload, slot->info);
   slot->lastSeenMs = millis();
 }
@@ -32,16 +34,21 @@ size_t DeviceRegistry::count(uint8_t deviceType) const {
 }
 
 Device *DeviceRegistry::byIndex(uint8_t deviceType, size_t idx) {
-  // Selection by ascending MAC, stable display order across rescans.
+  // Selection by ascending id (0 = unset sorts last), stable for equal ids.
+  Device *best = nullptr;
   size_t skip = idx;
+  // simple O(n^2) selection – MAX_DEVICES is small
   bool taken[MAX_DEVICES] = {false};
-  for (;;) {
-    Device *best = nullptr;
+  for (size_t round = 0;; round++) {
+    best = nullptr;
     size_t bestIdx = 0;
     for (size_t i = 0; i < MAX_DEVICES; i++) {
       Device &d = _dev[i];
       if (!d.used || d.deviceType != deviceType || taken[i]) continue;
-      if (!best || memcmp(d.mac, best->mac, 6) < 0) { best = &d; bestIdx = i; }
+      const uint16_t key = (d.id == 0) ? 0x100 : d.id;
+      const uint16_t bestKey =
+          (best == nullptr) ? 0xFFFF : ((best->id == 0) ? 0x100 : best->id);
+      if (key < bestKey) { best = &d; bestIdx = i; }
     }
     if (!best) return nullptr;  // idx out of range
     if (skip == 0) return best;
@@ -50,12 +57,11 @@ Device *DeviceRegistry::byIndex(uint8_t deviceType, size_t idx) {
   }
 }
 
-uint32_t DeviceRegistry::maxVersionKey(uint8_t deviceType) const {
-  uint32_t maxKey = 0;
-  for (const auto &d : _dev) {
-    if (!d.used || d.deviceType != deviceType) continue;
-    const uint32_t k = versionKey(d.info);
-    if (k > maxKey) maxKey = k;
+bool DeviceRegistry::isDuplicateId(const Device &d) const {
+  if (d.id == 0) return false;
+  for (const auto &o : _dev) {
+    if (!o.used || &o == &d) continue;
+    if (o.deviceType == d.deviceType && o.id == d.id) return true;
   }
-  return maxKey;
+  return false;
 }

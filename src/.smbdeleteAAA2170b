@@ -1,7 +1,6 @@
 // In-RAM list of devices found by the last discovery cycle.
 // Stateless by design (Doc 18 §1): cleared on every new discovery, the
-// devices' own NVS is the source of truth. Since protocol v0x02 the MAC is
-// the only identity; lists are ordered by MAC for a stable display.
+// devices' own NVS is the source of truth.
 
 #pragma once
 #include <Arduino.h>
@@ -11,6 +10,7 @@ struct Device {
   bool used = false;
   uint8_t mac[6] = {0};
   uint8_t deviceType = 0;  // inow::DeviceType
+  uint8_t id = 0;          // station_id or target_id, 0 = unset ("??")
   inow::DiscoverReply info;
   uint32_t lastSeenMs = 0;
 };
@@ -26,17 +26,11 @@ class DeviceRegistry {
 
   size_t count(uint8_t deviceType) const;
 
-  // n-th device of the given type, ordered by MAC ascending.
+  // n-th device of the given type, ordered by id ascending (unset ids last).
   Device *byIndex(uint8_t deviceType, size_t idx);
 
-  // Highest firmware version key (major<<16|minor<<8|patch) seen for the
-  // type, 0 if no device of that type is known.
-  uint32_t maxVersionKey(uint8_t deviceType) const;
-
-  static uint32_t versionKey(const inow::DiscoverReply &info) {
-    return ((uint32_t)info.fw_major << 16) | ((uint32_t)info.fw_minor << 8) |
-           info.fw_patch;
-  }
+  // True if another device of the same type shares this id (id != 0).
+  bool isDuplicateId(const Device &d) const;
 
  private:
   Device _dev[MAX_DEVICES];

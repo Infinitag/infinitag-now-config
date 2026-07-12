@@ -1,4 +1,4 @@
-// OLED menu state machine (Doc 18 §5 + §8) for the 0.96" SSD1315 128x64.
+// OLED menu state machine (Doc 18 §5) for the 0.96" SSD1315 128x64.
 // Two-color panel: rows 0..15 yellow (title bar), rows 16..63 blue (body).
 //
 // Interaction model (since 2026-07-11): EVERYTHING is reachable with the
@@ -7,6 +7,11 @@
 //   K1 = back / cancel value edit   K2 (hold) = x10 step / (press) rescan
 //   K3 = identify blink on/off      K4 = OK (same as encoder push)
 // Fast turning accelerates value edits (x10 without any button).
+//
+// Since protocol v0x02 devices are identified by MAC only (suffix shown,
+// e.g. "220AAC"); the SETUP flow is gone. New: firmware update screens
+// (remote device via UPDATE_BEGIN, own firmware via SoftAP web updater)
+// and an outdated-firmware marker '^' in the device lists.
 
 #pragma once
 #include <Arduino.h>
@@ -15,6 +20,7 @@
 #include "DeviceRegistry.h"
 #include "EspNowService.h"
 #include "InputController.h"
+#include "WebUpdateService.h"
 
 class UiController {
  public:
@@ -26,42 +32,60 @@ class UiController {
 
  private:
   // --- screens ---------------------------------------------------------------
-  // Device-first navigation (since 2026-07-11): pick the device from the
-  // list, THEN choose an action in its device menu (Prusa-style).
+  // Device-first navigation: pick the device from the list, THEN choose an
+  // action in its device menu (Prusa-style).
   enum Screen : uint8_t {
     SCR_MAIN,
     SCR_DEVICE_LIST,   // stations or targets, see _listType
     SCR_DEVICE_MENU,   // actions for the selected device (_editDev)
     SCR_DEVICE_EDIT,
-    SCR_SETUP_WAIT,    // "Neue Station": SETUP_BEGIN active
     SCR_SOUND_TEST,    // pick sound + fire CFG_TEST_SOUND at chosen station
     SCR_SELF_TEST,     // remote self-test (DEBUG_CMD/DEBUG_RESULT)
+    SCR_DEV_UPDATE,    // sent UPDATE_BEGIN, show the device's AP info
     SCR_LIVE_MONITOR,
+    SCR_TOOLS_MENU,    // Firmware-Info / own update mode
     SCR_TOOLS_INFO,
+    SCR_SELF_UPDATE,   // own SoftAP web updater (ends in reboot)
     SCR_NOTICE,        // one-line info screen (e.g. "Web-UI ab V0.2")
   };
 
   // Static rows before the devices in a device list:
-  // stations: 0 = "< Zurueck", 1 = "Neu suchen", 2 = "Neue Station (Stab)"
-  // targets:  0 = "< Zurueck", 1 = "Neu suchen"
-  uint8_t listStaticRows() const;
+  // 0 = "< Zurueck", 1 = "Neu suchen"
+  static constexpr uint8_t LIST_STATIC_ROWS = 2;
 
   // --- editing ---------------------------------------------------------------
   static constexpr size_t MAX_FIELDS = 8;
+  enum FieldFmt : uint8_t {
+    FMT_NUM,      // plain number (+ optional unit)
+    FMT_BITS,     // sw_channels: "12-" style
+    FMT_LED,      // LED channel mask: letters "R".."RGBW"
+    FMT_STATION,  // index into _staPick, shown as MAC suffix
+  };
   struct Field {
     const char *label;
     int32_t value, min, max, step;
     const char *unit;   // may be nullptr
-    bool isBitmask;     // render as ●○● (sw_channels)
-    bool isLedMask;     // render as channel letters "R".."RGBW" (led_ready/busy)
+    FieldFmt fmt;
   };
+
+  // Station picker for the target editor: discovered stations plus (if not
+  // rediscovered) the MAC currently stored in the target.
+  static constexpr size_t MAX_STA_PICK = 8;
 
   // --- live monitor ------------------------------------------------------------
   static constexpr size_t MONITOR_RING = 8;
   struct HitEntry {
     uint32_t ms;
-    uint8_t targetId, stationId, soundId;
+    uint8_t targetMac[6];
+    uint8_t stationMac[6];
+    uint8_t soundId;
   };
+
+  // --- device update handshake ---------------------------------------------------
+  enum UpdState : uint8_t { UPD_WAIT_ACK, UPD_ACTIVE, UPD_NO_ACK };
+
+  // --- own update mode -------------------------------------------------------------
+  enum SelfUpdState : uint8_t { SELFUPD_OFF, SELFUPD_REFUSED, SELFUPD_ACTIVE };
 
   // --- helpers -----------------------------------------------------------------
   void gotoScreen(Screen s);
@@ -74,12 +98,18 @@ class UiController {
   void enterEdit(Device &d);
   void sendCfgWrite();
   void sendTestSound();
-  void beginSetupMode();
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
+  void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
+  void beginSelfUpdate();          // battery check + own SoftAP updater
+  float readVbat() const;
+
+  // '^' marker: a newer firmware of the same device type exists in the list.
+  bool isOutdated(const Device &d) const;
 
   void drawTitle(const char *title, int count = -1);
   void drawFooter(const char *text);
-  void macSuffix(const uint8_t mac[6], char *out);  // "AABBCC"
+  static void macSuffix(const uint8_t mac[6], char *out);  // "AABBCC"
+  void apName(char *out, size_t n, const Device &d) const;
 
   // --- members -----------------------------------------------------------------
   EspNowService &_net;
@@ -106,11 +136,9 @@ class UiController {
   uint32_t _ackDeadline = 0;
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
 
-  // setup state
-  uint32_t _setupStartedMs = 0;
-  uint32_t _lastSetupTxMs = 0;
-  char _setupResult[24] = "";
-  uint8_t _setupNewId = 1;   // id to assign, sent in the SETUP_BEGIN header
+  // station picker (target editor)
+  uint8_t _staPick[MAX_STA_PICK][6];
+  uint8_t _staPickCount = 0;
 
   // sound test state
   uint8_t _testSound = 0;
@@ -121,6 +149,16 @@ class UiController {
   uint8_t _selfRunning = 0;     // DebugTest id currently awaited, 0 = none
   bool _selfAllMode = false;    // "Alle testen": auto-advance on result
   uint32_t _selfDeadline = 0;
+
+  // device update state
+  UpdState _updState = UPD_WAIT_ACK;
+  uint32_t _updAckDeadline = 0;
+
+  // own update mode
+  WebUpdateService _webUpd;
+  SelfUpdState _selfUpd = SELFUPD_OFF;
+  uint32_t _selfUpdDeadline = 0;
+  char _selfUpdAp[32] = "";
 
   // live monitor
   HitEntry _hits[MONITOR_RING];
