@@ -82,7 +82,11 @@ class UiController {
   };
 
   // --- device update handshake ---------------------------------------------------
-  enum UpdState : uint8_t { UPD_WAIT_ACK, UPD_ACTIVE, UPD_NO_ACK };
+  // WAIT_ACK -> ACTIVE (device opened its AP). While ACTIVE the box polls
+  // with DISCOVER_REQ until the device reboots back onto ESP-NOW ->
+  // DEVICE_BACK shows the result (version compare) and auto-returns.
+  enum UpdState : uint8_t { UPD_WAIT_ACK, UPD_ACTIVE, UPD_NO_ACK,
+                            UPD_DEVICE_BACK };
 
   // --- own update mode -------------------------------------------------------------
   enum SelfUpdState : uint8_t { SELFUPD_OFF, SELFUPD_REFUSED, SELFUPD_ACTIVE };
@@ -94,6 +98,7 @@ class UiController {
   void render();
 
   void startDiscovery(uint8_t deviceType);
+  void sendDiscoverReq(uint8_t deviceType);  // request only, keeps registry
   void sendIdentify(const Device &d);
   void enterEdit(Device &d);
   void sendCfgWrite();
@@ -157,6 +162,10 @@ class UiController {
   // device update state
   UpdState _updState = UPD_WAIT_ACK;
   uint32_t _updAckDeadline = 0;
+  uint32_t _updOldVer = 0;      // version key before the update
+  uint32_t _updPollMs = 0;      // last DISCOVER_REQ poll while ACTIVE
+  uint32_t _updBackMs = 0;      // when the device reappeared
+  char _updResult[24] = "";     // "Update OK: v0.2.2" / "Zurueck, unveraendert"
 
   // own update mode
   WebUpdateService _webUpd;
