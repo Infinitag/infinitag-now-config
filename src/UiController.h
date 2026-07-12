@@ -101,6 +101,10 @@ class UiController {
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
   void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
   void beginSelfUpdate();          // battery check + own SoftAP updater
+  // Draws a final "reboot" frame (the OLED keeps showing the last frame
+  // across ESP.restart(), so without this the user cannot tell that the
+  // reboot happened), then restarts. Never returns.
+  void rebootWithScreen(const char *line);
   float readVbat() const;
 
   // '^' marker: a newer firmware of the same device type exists in the list.

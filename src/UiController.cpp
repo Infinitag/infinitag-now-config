@@ -239,6 +239,16 @@ void UiController::beginDeviceUpdate() {
   }
 }
 
+void UiController::rebootWithScreen(const char *line) {
+  _oled.clearBuffer();
+  drawTitle("Update-Modus");
+  _oled.drawStr(0, 32, line);
+  _oled.drawStr(0, 44, "Neustart...");
+  _oled.sendBuffer();
+  delay(800);  // long enough to read before the radio/screen freeze
+  ESP.restart();
+}
+
 float UiController::readVbat() const {
   // average 8 samples: the 100k/22k divider is high-impedance for the
   // ADC sample cap; a 100 nF cap at GPIO3 fixes the systematic droop,
@@ -269,7 +279,7 @@ void UiController::beginSelfUpdate() {
     _selfUpd = SELFUPD_ACTIVE;
     _selfUpdDeadline = millis() + cfg::SELF_UPDATE_TIMEOUT_MS;
   } else {
-    ESP.restart();  // radio state is undefined now – restart cleanly
+    rebootWithScreen("AP-Fehler");  // radio state is undefined now
   }
 }
 
@@ -555,7 +565,7 @@ void UiController::handleInput() {
         }
       } else if (back) {
         // ESP-NOW is torn down – a clean reboot is the only way back.
-        ESP.restart();
+        rebootWithScreen("Abbruch");
       }
       break;
 
@@ -615,9 +625,10 @@ void UiController::handleTimers() {
     if (_webUpd.updateDone()) {
       render();  // one last "OK" frame
       delay(1500);  // let the browser receive the response page
-      ESP.restart();
+      rebootWithScreen("Update OK");
     }
-    if (now >= _selfUpdDeadline && !_webUpd.uploadActive()) ESP.restart();
+    if (now >= _selfUpdDeadline && !_webUpd.uploadActive())
+      rebootWithScreen("Timeout");
     _dirty = true;  // keep the client counter fresh
   }
 
