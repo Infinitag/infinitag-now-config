@@ -46,7 +46,6 @@ class UiController {
     SCR_TOOLS_MENU,    // Firmware-Info / own update mode
     SCR_TOOLS_INFO,
     SCR_SELF_UPDATE,   // own SoftAP web updater (ends in reboot)
-    SCR_NOTICE,        // one-line info screen (e.g. "Web-UI ab V0.2")
   };
 
   // Static rows before the devices in a device list:
