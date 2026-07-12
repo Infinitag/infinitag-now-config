@@ -131,17 +131,41 @@ bool ImageStore::scanFile(const char *p, ImageInfo &out) {
 
 // --- streaming upload (StoreHooks) ---------------------------------------------
 
+void ImageStore::wipeAll() {
+  _station = ImageInfo{};
+  _target = ImageInfo{};
+  logf("[IMG] Formatiere FS (%u KB belegt)\n",
+       (unsigned)(LittleFS.usedBytes() / 1024));
+  LittleFS.format();  // box FS holds nothing but the image store
+  LittleFS.mkdir("/img");
+  logf("[IMG] Format fertig, %u KB belegt\n",
+       (unsigned)(LittleFS.usedBytes() / 1024));
+}
+
 bool ImageStore::uploadBegin() {
-  // Single-slot store: the 1.5 MB FS holds one image at a time – drop
+  // Single-slot store: the 1.5 MB FS holds one image at a time - drop
   // everything stored so tmp + old image never exceed the partition.
-  remove(inow::DEV_STATION);
-  remove(inow::DEV_TARGET);
+  // Remove by PATH, not via remove(): after a broken write a file can
+  // exist on disk while its slot is empty (boot scan found no marker)
+  // and would silently eat the partition forever.
+  _station = ImageInfo{};
+  _target = ImageInfo{};
+  LittleFS.remove(path(inow::DEV_STATION));
+  LittleFS.remove(path(inow::DEV_TARGET));
   LittleFS.remove(TMP_PATH);
+  // Store is empty now; substantial usage left = orphaned blocks from a
+  // corrupt entry that remove() cannot reach -> only a format helps.
+  if (LittleFS.usedBytes() > 64 * 1024) wipeAll();
+  LittleFS.mkdir("/img");
+
   _tmp = LittleFS.open(TMP_PATH, "w");
   if (!_tmp) {
     snprintf(_result, sizeof(_result), "Speicher voll oder FS-Fehler");
     return false;
   }
+  logf("[IMG] Upload beginnt (FS %u/%u KB belegt)\n",
+       (unsigned)(LittleFS.usedBytes() / 1024),
+       (unsigned)(LittleFS.totalBytes() / 1024));
   _rxBytes = 0;
   resetScan();
   return true;
@@ -150,7 +174,12 @@ bool ImageStore::uploadBegin() {
 bool ImageStore::uploadWrite(const uint8_t *data, size_t len) {
   if (!_tmp) return false;
   feedScan(data, len);
-  if (_tmp.write(data, len) != len) return false;
+  if (_tmp.write(data, len) != len) {
+    logf("[IMG] Schreibfehler bei %u Bytes (FS %u/%u KB belegt)\n",
+         (unsigned)_rxBytes, (unsigned)(LittleFS.usedBytes() / 1024),
+         (unsigned)(LittleFS.totalBytes() / 1024));
+    return false;
+  }
   _rxBytes += len;
   return true;
 }

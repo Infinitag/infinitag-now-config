@@ -367,9 +367,38 @@ void UiController::buildWebPages() {
       status = line;
     }
     if (status.isEmpty()) status = "&ndash; kein Image &ndash;";
+
+    char fs[48];
+    snprintf(fs, sizeof(fs), "%u von %u KB belegt",
+             (unsigned)(LittleFS.usedBytes() / 1024),
+             (unsigned)(LittleFS.totalBytes() / 1024));
+
+    // raw directory listing - shows leftovers the slots do not know
+    String list;
+    File dir = LittleFS.open("/img");
+    if (dir) {
+      File f;
+      while ((f = dir.openNextFile())) {
+        char line[80];
+        snprintf(line, sizeof(line), "%s  %u Bytes\n", f.name(),
+                 (unsigned)f.size());
+        list += line;
+        f.close();
+      }
+      dir.close();
+    }
+    if (list.isEmpty()) list = "(keine Dateien)";
+
     String sec = WEB_SEC_IMAGES;
     sec.replace("%IMG_STATUS%", status);
+    sec.replace("%FS_STATUS%", fs);
+    sec.replace("%IMG_LIST%", list);
     _webUpd.server().send(200, "text/html", webPage("/images", sec));
+  });
+  srv.on("/images/format", HTTP_POST, [this]() {
+    _images.wipeAll();
+    _webUpd.server().sendHeader("Location", "/images");
+    _webUpd.server().send(303, "text/plain", "");
   });
   srv.on("/log", HTTP_GET, [this]() {
     String content;

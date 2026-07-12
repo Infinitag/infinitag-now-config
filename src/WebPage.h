@@ -101,13 +101,19 @@ static const char WEB_SEC_IMAGES[] = R"rawpage(
 <form class="sec" method="POST" action="/store" enctype="multipart/form-data">
 <h2>GER&Auml;TE-IMAGES</h2>
 <p>Firmware f&uuml;r Station/Target auf der Box speichern &mdash; wird per Funk verteilt, die Box flasht sich damit <b>nicht</b> selbst.</p>
-<p>Gespeichert: <b>%IMG_STATUS%</b></p>
+<p>Gespeichert: <b>%IMG_STATUS%</b><br>Dateisystem: <b>%FS_STATUS%</b></p>
+<pre class="log">%IMG_LIST%</pre>
 <div class="col">
 <label class="file"><span>Datei ausw&auml;hlen</span><i>Keine Datei ausgew&auml;hlt</i><input type="file" name="img" accept=".bin"></label>
 <button type="submit">Image speichern</button>
 </div>
 <div class="hint">Der Speicher fasst <b>ein</b> Image; ein neuer Upload ersetzt das vorhandene.</div>
 </form>
+<div class="sec">
+<h2>SPEICHER BEREINIGEN</h2>
+<p>Formatiert das Dateisystem der Box (entfernt auch unsichtbare Datei-Leichen). WLAN-Daten und Versions-Memo bleiben erhalten (NVS).</p>
+<form method="POST" action="/images/format" onsubmit="return confirm('Dateisystem wirklich formatieren?');"><button type="submit">Formatieren</button></form>
+</div>
 )rawpage";
 
 static const char WEB_SEC_LOG[] = R"rawpage(

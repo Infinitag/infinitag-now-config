@@ -26,6 +26,9 @@ class ImageStore {
   const ImageInfo &info(uint8_t deviceType) const;
   uint32_t versionKey(uint8_t deviceType) const;  // 0 = no image
   bool remove(uint8_t deviceType);
+  // Format the FS (it holds nothing but this store) and reset both
+  // slots - the remedy for orphaned blocks a remove() cannot reach.
+  void wipeAll();
   static const char *path(uint8_t deviceType);  // nullptr for other types
 
   // Streaming upload target (wired into WebUpdateService::StoreHooks).
