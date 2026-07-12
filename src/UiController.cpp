@@ -389,17 +389,20 @@ bool UiController::beginPush(const Device &d) {
 
   // CRC once over the file (bitwise, ~0.5 s per MB on the C3)
   uint32_t crc = 0;
+  size_t crcBytes = 0;
   uint8_t buf[1024];
   while (_pushFile.available()) {
     const int n = _pushFile.read(buf, sizeof(buf));
     if (n <= 0) break;
     crc = crc32(crc, buf, (size_t)n);
+    crcBytes += (size_t)n;
   }
 
   _pushImgKey = _images.versionKey(d.deviceType);
   _pushPhase = 0;
   _pushResult[0] = '\0';
-  if (!_pushTx.start(&_net, d.mac, pushRead, &_pushFile, img.size, crc,
+  // announce exactly what the CRC covered, not the store metadata
+  if (!_pushTx.start(&_net, d.mac, pushRead, &_pushFile, crcBytes, crc,
                      img.major, img.minor, img.patch)) {
     _pushFile.close();
     return false;
