@@ -52,7 +52,7 @@ constexpr uint32_t SELF_UPDATE_TIMEOUT_MS = 10UL * 60UL * 1000UL;  // own AP win
 // Readings < 3.0 V mean "running from USB" (divider floats) -> always OK.
 constexpr float VBAT_MIN_FOR_UPDATE = 3.6f;
 
-// --- Sounds ------------------------------------------------------------------------
-constexpr uint8_t SOUND_ID_MAX = 13;  // StationSounds/sound-effects 0..13
+// Sounds: IDs, Dateien und Anzeigenamen kommen zentral aus dem
+// SoundCatalog.h der Core-Lib (inow::SOUND_COUNT / inow::soundName()).
 
 }  // namespace cfg
