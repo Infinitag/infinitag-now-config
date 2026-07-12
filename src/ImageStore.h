@@ -45,7 +45,7 @@ class ImageStore {
   ImageInfo *slot(uint8_t deviceType);
 
   ImageInfo _station, _target;
-  File _tmp;
+  int _fd = -1;         // raw VFS fd of the upload temp file
   size_t _rxBytes = 0;  // bytes accepted by uploadWrite (authoritative size)
   char _result[64] = "";
 

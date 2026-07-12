@@ -1,12 +1,19 @@
 #include "ImageStore.h"
 
 #include <LittleFS.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "FwMarker.h"
 #include "InfinitagNow.h"
 #include "WebLog.h"
 
 static const char *TMP_PATH = "/img/upload.tmp";
+// Full VFS path (LittleFS default mount point) for the raw POSIX file
+// API - the upload bypasses Arduino File/stdio on purpose: the stdio
+// buffer layer lost the final partial block of large streams silently
+// (File::close() is void), raw write/fsync/close report every error.
+static const char *TMP_VFS_PATH = "/littlefs/img/upload.tmp";
 
 // Assembled at runtime from the split prefix so this binary does not
 // contain the contiguous marker pattern (it would match itself).
@@ -158,8 +165,9 @@ bool ImageStore::uploadBegin() {
   if (LittleFS.usedBytes() > 64 * 1024) wipeAll();
   LittleFS.mkdir("/img");
 
-  _tmp = LittleFS.open(TMP_PATH, "w");
-  if (!_tmp) {
+  _fd = ::open(TMP_VFS_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (_fd < 0) {
+    logf("[IMG] open fehlgeschlagen (errno %d)\n", errno);
     snprintf(_result, sizeof(_result), "Speicher voll oder FS-Fehler");
     return false;
   }
@@ -172,25 +180,32 @@ bool ImageStore::uploadBegin() {
 }
 
 bool ImageStore::uploadWrite(const uint8_t *data, size_t len) {
-  if (!_tmp) return false;
+  if (_fd < 0) return false;
   feedScan(data, len);
-  if (_tmp.write(data, len) != len) {
-    logf("[IMG] Schreibfehler bei %u Bytes (FS %u/%u KB belegt)\n",
-         (unsigned)_rxBytes, (unsigned)(LittleFS.usedBytes() / 1024),
-         (unsigned)(LittleFS.totalBytes() / 1024));
-    return false;
+  size_t done = 0;
+  while (done < len) {
+    const ssize_t n = ::write(_fd, data + done, len - done);
+    if (n <= 0) {
+      logf("[IMG] Schreibfehler bei %u Bytes (errno %d, FS %u/%u KB)\n",
+           (unsigned)(_rxBytes + done), errno,
+           (unsigned)(LittleFS.usedBytes() / 1024),
+           (unsigned)(LittleFS.totalBytes() / 1024));
+      return false;
+    }
+    done += (size_t)n;
   }
   _rxBytes += len;
   return true;
 }
 
 bool ImageStore::uploadEnd(bool ok) {
-  if (!_tmp) return false;
-  // File::size() on the open write handle returns the last committed
-  // metadata size - the unsynced tail (up to one 4 KB block) is missing.
-  // Close first, then trust the byte count from uploadWrite and verify
-  // it against the on-disk file.
-  _tmp.close();
+  if (_fd < 0) return false;
+  // Sync + close with visible errors (Arduino File::close() swallows
+  // them), then verify the on-disk size against the byte count from
+  // uploadWrite - the last partial block must not get lost silently.
+  if (fsync(_fd) != 0) logf("[IMG] fsync-Fehler (errno %d)\n", errno);
+  if (::close(_fd) != 0) logf("[IMG] close-Fehler (errno %d)\n", errno);
+  _fd = -1;
 
   if (!ok || !_markerFound) {
     LittleFS.remove(TMP_PATH);
