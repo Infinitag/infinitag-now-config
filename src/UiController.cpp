@@ -11,8 +11,8 @@ using namespace inow;
 // ---------------------------------------------------------------------------
 
 static const char *MAIN_ITEMS[] = {"Stationen", "Targets", "Live-Monitor",
-                                   "Web-UI", "Tools"};
-static constexpr uint8_t MAIN_COUNT = 5;
+                                   "Tools"};
+static constexpr uint8_t MAIN_COUNT = 4;
 
 // Device menu (after picking a device from the list)
 static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
@@ -432,8 +432,7 @@ void UiController::handleInput() {
             gotoScreen(SCR_DEVICE_LIST);
             break;
           case 2: gotoScreen(SCR_LIVE_MONITOR); break;
-          case 3: gotoScreen(SCR_NOTICE); break;  // Web-UI ab V0.2
-          case 4: gotoScreen(SCR_TOOLS_MENU); break;
+          case 3: gotoScreen(SCR_TOOLS_MENU); break;
         }
       }
       break;
@@ -595,7 +594,6 @@ void UiController::handleInput() {
 
     case SCR_LIVE_MONITOR:
     case SCR_TOOLS_INFO:
-    case SCR_NOTICE:
       if (back || push) gotoScreen(SCR_MAIN);
       break;
   }
@@ -1023,12 +1021,6 @@ void UiController::render() {
       break;
     }
 
-    case SCR_NOTICE:
-      drawTitle("Web-UI");
-      _oled.drawStr(0, 30, "Kommt in V0.2");
-      _oled.drawStr(0, 42, "(SoftAP + Browser)");
-      drawFooter("Push = Zurueck");
-      break;
   }
 
   _oled.sendBuffer();
