@@ -36,21 +36,15 @@ mkdir -p dist
 cp "$BIN" "dist/$ASSET"
 
 # --- Taggen, pushen, Release ---------------------------------------------------
-PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
-if [[ -n "$PREV" ]]; then
-  NOTES=$(git log --oneline "${PREV}..HEAD" | sed 's/^/- /')
-else
-  NOTES=$(git log --oneline -10 | sed 's/^/- /')
-fi
-
+# Release-Notes generiert GitHub aus den gemergten PRs seit dem letzten Tag,
+# gruppiert nach Labels (.github/release.yml) – deshalb: Aenderungen ueber
+# PRs einbringen, sonst tauchen sie hier nicht auf.
 git tag "$VER"
 git push origin main --tags
 gh release create "$VER" "dist/$ASSET" \
   --title "Config-Box $VER" \
-  --notes "Firmware-Update per SoftAP: Tools → Update-Modus, dann ${ASSET} auf http://192.168.4.1 hochladen.
-
-Aenderungen:
-${NOTES}"
+  --generate-notes \
+  --notes "**Installation:** Config-Box → Tools → Update-Modus, dann \`${ASSET}\` auf http://192.168.4.1 hochladen."
 
 echo "== Release $VER erstellt =="
 gh release view "$VER" --json url -q .url

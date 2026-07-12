@@ -77,6 +77,19 @@ Interrupt – **kein PCNT auf dem C3!** – plus 5 Tasten entprellt),
 4. Web-UI V0.2 (SoftAP, Doc 18 § 9) – bewusst zurückgestellt.
 5. Offen aus V0.1: Live-Monitor-Filter (K3), Sniffer.
 
+## Git-Workflow: PRs statt Direkt-Commits (seit 2026-07-12)
+
+- Änderungen laufen über **Feature-Branches + PRs**: Branch `feat/…`,
+  `fix/…`, `docs/…`, `refactor/…`, `chore/…`; PR-Titel im gleichen
+  Schema (`feat: …`), Template ausfüllen, **genau ein Typ-Label** setzen
+  (`enhancement`/`bug`/`documentation`/`refactor`/`chore`/`protocol`).
+- **Squash-Merge** auf `main` – der PR-Titel wird der Commit auf main.
+- Claude erstellt Branch + PR (inkl. Branch-Push via `gh`); **Merge
+  entscheidet Tobias** (oder Claude nach explizitem OK).
+- Die Release-Notes generiert GitHub aus den gemergten PRs seit dem
+  letzten Tag, gruppiert per Label (`.github/release.yml`) –
+  Direkt-Commits auf main tauchen dort NICHT auf, also vermeiden.
+
 ## Firmware-Versionen & Releases (seit 2026-07-12)
 
 - **Versionen entstehen BEWUSST, nie automatisch.** Claude zählt
