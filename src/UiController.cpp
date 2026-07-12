@@ -25,8 +25,8 @@ static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
 static constexpr uint8_t DEVMENU_TARGET_COUNT = 3;
 
 static const char *TOOLS_ITEMS[] = {"< Zurueck", "Firmware-Info",
-                                    "Update-Modus"};
-static constexpr uint8_t TOOLS_COUNT = 3;
+                                    "Update-Modus", "Versions-Memo Reset"};
+static constexpr uint8_t TOOLS_COUNT = 4;
 
 // Self-test rows: 0 = back, 1 = run all, 2..6 = tests 1..5 (DebugTest ids).
 static const char *SELFTEST_ITEMS[] = {"< Zurueck",  "Alle testen",
@@ -46,6 +46,7 @@ UiController::UiController(EspNowService &net, DeviceRegistry &reg,
       _oled(U8G2_R0, /* reset=*/U8X8_PIN_NONE) {}
 
 void UiController::begin() {
+  _memo.load();
   _oled.begin();
   _oled.setFont(u8g2_font_6x10_tf);
   gotoScreen(SCR_MAIN);
@@ -297,8 +298,14 @@ void UiController::beginSelfUpdate() {
 // ---------------------------------------------------------------------------
 
 bool UiController::isOutdated(const Device &d) const {
-  return DeviceRegistry::versionKey(d.info) <
-         _reg.maxVersionKey(d.deviceType);
+  // Reference = best of (newest version currently in the list, newest
+  // version ever seen, persisted in NVS). Stage 2 – the exact version
+  // from a firmware image carried by the box – comes with the ESP-NOW
+  // OTA (Doc 18 §12) and will simply become a third max() term here.
+  uint32_t ref = _reg.maxVersionKey(d.deviceType);
+  const uint32_t seen = _memo.maxKey(d.deviceType);
+  if (seen > ref) ref = seen;
+  return DeviceRegistry::versionKey(d.info) < ref;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +321,10 @@ void UiController::onPacket(const RxPacket &rx) {
       // is tolerated for early stub firmwares.
       if (p.token == _discoverToken || p.token == 0) {
         _reg.upsert(rx.mac, p);
+        // remember the newest firmware ever seen per type ('^' marker)
+        DiscoverReply info;
+        decodeDiscoverReply(p.payload, info);
+        _memo.note(p.device_type, DeviceRegistry::versionKey(info));
         if (_screen == SCR_DEVICE_LIST) _dirty = true;
       }
       // Update screen: the device rebooted back onto ESP-NOW – compare
@@ -576,6 +587,13 @@ void UiController::handleInput() {
           case 0: gotoScreen(SCR_MAIN); break;
           case 1: gotoScreen(SCR_TOOLS_INFO); break;
           case 2: gotoScreen(SCR_SELF_UPDATE); break;
+          case 3:
+            // forget the best-ever-seen versions (e.g. after a
+            // deliberate downgrade left a stale '^' marker)
+            _memo.clear();
+            snprintf(_toolsMsg, sizeof(_toolsMsg), "Memo geloescht");
+            _toolsMsgUntil = millis() + 3000;
+            break;
         }
       }
       if (back) gotoScreen(SCR_MAIN);
@@ -952,6 +970,10 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
+      if (_toolsMsg[0] && millis() < _toolsMsgUntil) {
+        drawFooter(_toolsMsg);
+        _dirty = true;  // repaint once the message expires
+      }
       break;
     }
 

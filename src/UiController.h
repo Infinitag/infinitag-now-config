@@ -20,6 +20,7 @@
 #include "DeviceRegistry.h"
 #include "EspNowService.h"
 #include "InputController.h"
+#include "VersionMemo.h"
 #include "WebUpdateService.h"
 
 class UiController {
@@ -112,7 +113,8 @@ class UiController {
   void rebootWithScreen(const char *line);
   float readVbat() const;
 
-  // '^' marker: a newer firmware of the same device type exists in the list.
+  // '^' marker: a newer firmware of the same device type is known –
+  // either currently in the list or ever seen before (VersionMemo).
   bool isOutdated(const Device &d) const;
 
   void drawTitle(const char *title, int count = -1);
@@ -172,6 +174,11 @@ class UiController {
   SelfUpdState _selfUpd = SELFUPD_OFF;
   uint32_t _selfUpdDeadline = 0;
   char _selfUpdAp[32] = "";
+
+  // highest firmware version ever seen per device type (NVS)
+  VersionMemo _memo;
+  char _toolsMsg[24] = "";      // short-lived footer note in the tools menu
+  uint32_t _toolsMsgUntil = 0;
 
   // live monitor
   HitEntry _hits[MONITOR_RING];
