@@ -1,13 +1,18 @@
-// SoftAP page of the config box (design by Tobias, 2026-07-12).
+// SoftAP pages of the config box (design by Tobias, 2026-07-12).
 //
-// Served via WebUpdateService::setCustomPage(); the UiController fills
-// the placeholders %DEVICE_ID%, %VERSION% and %WIFI_STATUS% before
-// registering the page (and again after the WLAN form was saved).
-// Forms post to the existing routes /update, /wifi and /store.
+// The UI is a small menu of four pages served on the SoftAP web server:
+//   /        Firmware-Update of the box itself   (WEB_SEC_UPDATE)
+//   /wlan    WLAN credentials for internet updates (WEB_SEC_WLAN)
+//   /images  Device image upload into the store    (WEB_SEC_IMAGES)
+//   /log     Ring-buffer log viewer                (WEB_SEC_LOG)
+// Every page = WEB_PAGE_TOP (+ %NAV% menu, %DEVICE_ID%) + one section
+// + WEB_PAGE_BOTTOM. The root page is persistent (WebUpdateService
+// keeps a pointer); the others are built on demand in UiController.
+// Forms post to the existing routes /update, /wifi, /store, /log/clear.
 
 #pragma once
 
-static const char WEB_PAGE_TEMPLATE[] = R"rawpage(
+static const char WEB_PAGE_TOP[] = R"rawpage(
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -27,6 +32,10 @@ a:hover{color:#79C8B4}
 .wm i{font-style:normal;color:#939598}
 .wm em{font-style:normal;color:#4db3a2}
 .sub{font-size:11px;color:#8a9092;letter-spacing:1px;margin-top:2px}
+.nv{display:flex;gap:4px;padding:10px 20px;border-bottom:1px solid #23282a;flex-wrap:wrap}
+.nv a{padding:6px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:1px;color:#8a9092}
+.nv a:hover{color:#e8eaea}
+.nv a.on{background:#0d8c80;color:#fff}
 .bd{padding:6px 28px 28px}
 .sec{border-top:2px solid #333c3f;margin-top:28px;padding-top:22px}
 .sec:first-child{border:0;margin-top:0;padding-top:16px}
@@ -40,8 +49,10 @@ p{color:#8a9092;margin:0 0 10px;line-height:1.5}
 .file i{font-style:normal;color:#6e7578;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file input{display:none}
 input[type=text],input[type=password]{background:#131516;border:1px solid #3a4144;border-radius:6px;color:#e8eaea;padding:9px 12px;font-size:13px}
-button{align-self:flex-start;background:transparent;color:#79C8B4;border:1px solid #0d8c80;border-radius:4px;padding:8px 18px;font-size:13px;font-weight:700;cursor:pointer}
-button:hover{background:#0d8c80;color:#fff}
+button,a.btn{align-self:flex-start;display:inline-block;background:transparent;color:#79C8B4;border:1px solid #0d8c80;border-radius:4px;padding:8px 18px;font-size:13px;font-weight:700;cursor:pointer}
+button:hover,a.btn:hover{background:#0d8c80;color:#fff}
+.btnrow{display:flex;gap:10px}
+.log{background:#0a0c0d;border:1px solid #23282a;border-radius:6px;padding:12px;margin:0 0 12px;font-family:Menlo,Consolas,monospace;font-size:11px;line-height:1.45;color:#c7cdcd;white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto}
 .ft{font-size:11px;color:#565c5e;text-align:center;letter-spacing:1px;border-top:1px solid #24282a;margin-top:18px;padding-top:14px}
 .ok{color:#79C8B4;font-weight:700}
 </style>
@@ -57,8 +68,11 @@ button:hover{background:#0d8c80;color:#fff}
 <div class="sub">CONFIG-BOX &middot; %DEVICE_ID%</div>
 </div>
 </div>
+<div class="nv">%NAV%</div>
 <div class="bd">
+)rawpage";
 
+static const char WEB_SEC_UPDATE[] = R"rawpage(
 <form class="sec" method="POST" action="/update" enctype="multipart/form-data">
 <h2>FIRMWARE-UPDATE</h2>
 <p>Laufende Version: <span class="ok">%VERSION%</span> &middot; <a href="https://github.com/Infinitag/infinitag-now-config/releases" target="_blank">Neueste Version auf GitHub&nbsp;&#8599;</a></p>
@@ -66,9 +80,11 @@ button:hover{background:#0d8c80;color:#fff}
 <label class="file"><span>Datei ausw&auml;hlen</span><i>Keine Datei ausgew&auml;hlt</i><input type="file" name="fw" accept=".bin"></label>
 <button type="submit">Update starten</button>
 </div>
-<div class="hint">Erwartete Datei: <b>infinitag-config-vX.Y.Z.bin</b> &mdash; andere Dateinamen werden abgelehnt. Nach dem Upload startet das Ger&auml;t neu.</div>
+<div class="hint">Erwartete Datei: <b>infinitag-config-vX.Y.Z.bin</b> &mdash; andere Dateinamen werden abgelehnt. Nur die Box selbst wird geflasht; nach dem Upload startet sie neu.</div>
 </form>
+)rawpage";
 
+static const char WEB_SEC_WLAN[] = R"rawpage(
 <form class="sec" method="POST" action="/wifi">
 <h2>WLAN F&Uuml;R INTERNET-UPDATES</h2>
 <p>Aktuell: <b>%WIFI_STATUS%</b></p>
@@ -77,24 +93,44 @@ button:hover{background:#0d8c80;color:#fff}
 <input type="password" name="pass" placeholder="Passwort">
 <button type="submit">WLAN speichern</button>
 </div>
+<div class="hint">Genutzt von Tools &gt; <b>Internet-Update</b>: Die Box verbindet sich nur dort mit dem WLAN und bleibt sonst auf ESP-NOW.</div>
 </form>
+)rawpage";
 
+static const char WEB_SEC_IMAGES[] = R"rawpage(
 <form class="sec" method="POST" action="/store" enctype="multipart/form-data">
-<h2>GER&Auml;TE-IMAGE ABLEGEN</h2>
+<h2>GER&Auml;TE-IMAGES</h2>
 <p>Firmware f&uuml;r Station/Target auf der Box speichern &mdash; wird per Funk verteilt, die Box flasht sich damit <b>nicht</b> selbst.</p>
+<p>Gespeichert: <b>%IMG_STATUS%</b></p>
 <div class="col">
 <label class="file"><span>Datei ausw&auml;hlen</span><i>Keine Datei ausgew&auml;hlt</i><input type="file" name="img" accept=".bin"></label>
 <button type="submit">Image speichern</button>
 </div>
+<div class="hint">Der Speicher fasst <b>ein</b> Image; ein neuer Upload ersetzt das vorhandene.</div>
 </form>
+)rawpage";
 
+static const char WEB_SEC_LOG[] = R"rawpage(
+<div class="sec">
+<h2>LOG</h2>
+<pre class="log" id="lg">%LOG%</pre>
+<div class="btnrow">
+<a class="btn" href="/log">Aktualisieren</a>
+<form method="POST" action="/log/clear"><button type="submit">Leeren</button></form>
+</div>
+<div class="hint">Ringpuffer (6&nbsp;KB, &auml;lteste Zeilen fallen raus). &Uuml;berlebt Neustarts per Software &mdash; nicht das Ausschalten.</div>
+</div>
+<script>var l=document.getElementById('lg');l.scrollTop=l.scrollHeight;</script>
+)rawpage";
+
+static const char WEB_PAGE_BOTTOM[] = R"rawpage(
 <div class="ft">INFINITAG NOW &middot; CONFIG-BOX &middot; <a href="https://github.com/Infinitag" target="_blank">GITHUB&nbsp;&#8599;</a></div>
 </div>
 </div>
 </div>
 <script>
 document.querySelectorAll('.file input').forEach(function(f){
-f.addEventListener('change',function(){f.parentNode.querySelector('i').textContent=f.files.length?f.files[0].name:'Keine Datei ausgew\u00e4hlt';});
+f.addEventListener('change',function(){f.parentNode.querySelector('i').textContent=f.files.length?f.files[0].name:'Keine Datei ausgewählt';});
 });
 </script>
 </body>

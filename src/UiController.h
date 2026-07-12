@@ -116,7 +116,8 @@ class UiController {
   void sendTestSound();
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
   void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
-  void buildWifiForm();            // (re)build the WLAN form incl. saved SSID
+  String webPage(const char *activePath, const String &section);
+  void buildWebPages();            // root page + /wlan, /images, /log routes
   bool beginPush(const Device &d); // start the ESP-NOW push (image needed)
   void bulkNext();                 // advance the "Alle aktualisieren" queue
   void beginSelfUpdate();          // battery check + own SoftAP updater
@@ -201,7 +202,7 @@ class UiController {
 
   // own update mode
   WebUpdateService _webUpd;
-  String _wifiFormHtml;  // extra form on the SoftAP page (WLAN creds)
+  String _rootPageHtml;  // persistent root page (WebUpdateService keeps a ptr)
   SelfUpdState _selfUpd = SELFUPD_OFF;
   uint32_t _selfUpdDeadline = 0;
   char _selfUpdAp[32] = "";

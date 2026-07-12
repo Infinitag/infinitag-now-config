@@ -7,6 +7,7 @@
 
 #include "Config.h"
 #include "NetUpdater.h"
+#include "WebLog.h"
 #include "WebPage.h"
 #include "SoundCatalog.h"
 
@@ -307,24 +308,82 @@ static const char *storeResult() { return s_imgStore->resultText(); }
 static const StoreHooks kStoreHooks = {storeBegin, storeWrite, storeEnd,
                                        storeResult};
 
-// (Re)build the SoftAP page from the design template; called at
-// update-mode start AND after every WLAN save so the page never shows a
-// stale SSID.
-void UiController::buildWifiForm() {
+// Assemble one SoftAP page: shared top (header + menu) + one section +
+// bottom. activePath marks the current menu entry.
+String UiController::webPage(const char *activePath, const String &section) {
+  static const char *NAV[][2] = {{"/", "UPDATE"},
+                                 {"/wlan", "WLAN"},
+                                 {"/images", "GER&Auml;TE-IMAGES"},
+                                 {"/log", "LOG"}};
   char mac[7];
   macSuffix(_net.ownMac(), mac);
+
+  String nav;
+  for (auto &item : NAV) {
+    nav += "<a href=\"";
+    nav += item[0];
+    nav += strcmp(item[0], activePath) == 0 ? "\" class=\"on\">" : "\">";
+    nav += item[1];
+    nav += "</a>";
+  }
+
+  String page = WEB_PAGE_TOP;
+  page.replace("%DEVICE_ID%", mac);
+  page.replace("%NAV%", nav);
+  page += section;
+  page += WEB_PAGE_BOTTOM;
+  return page;
+}
+
+// Build the persistent root page (= Update page; WebUpdateService keeps
+// a pointer to it) and register the remaining menu pages.
+void UiController::buildWebPages() {
   char ver[16];
   snprintf(ver, sizeof(ver), "v%u.%u.%u", cfg::FW_MAJOR, cfg::FW_MINOR,
            cfg::FW_PATCH);
-  char curSsid[33] = "";
-  NetUpdater::getWifiSsid(curSsid, sizeof(curSsid));
+  String sec = WEB_SEC_UPDATE;
+  sec.replace("%VERSION%", ver);
+  _rootPageHtml = webPage("/", sec);
+  _webUpd.setCustomPage(_rootPageHtml.c_str());
 
-  _wifiFormHtml = WEB_PAGE_TEMPLATE;
-  _wifiFormHtml.replace("%DEVICE_ID%", mac);
-  _wifiFormHtml.replace("%VERSION%", ver);
-  _wifiFormHtml.replace("%WIFI_STATUS%",
-                        curSsid[0] ? curSsid : "nicht konfiguriert");
-  _webUpd.setCustomPage(_wifiFormHtml.c_str());
+  WebServer &srv = _webUpd.server();
+  srv.on("/wlan", HTTP_GET, [this]() {
+    char curSsid[33] = "";
+    NetUpdater::getWifiSsid(curSsid, sizeof(curSsid));
+    String sec = WEB_SEC_WLAN;
+    sec.replace("%WIFI_STATUS%",
+                curSsid[0] ? curSsid : "nicht konfiguriert");
+    _webUpd.server().send(200, "text/html", webPage("/wlan", sec));
+  });
+  srv.on("/images", HTTP_GET, [this]() {
+    String status;
+    for (uint8_t t : {(uint8_t)DEV_STATION, (uint8_t)DEV_TARGET}) {
+      const ImageInfo &inf = _images.info(t);
+      if (!inf.present) continue;
+      char line[64];
+      snprintf(line, sizeof(line), "%s v%u.%u.%u &middot; %u Bytes",
+               t == DEV_STATION ? "Station" : "Target", inf.major, inf.minor,
+               inf.patch, (unsigned)inf.size);
+      status = line;
+    }
+    if (status.isEmpty()) status = "&ndash; kein Image &ndash;";
+    String sec = WEB_SEC_IMAGES;
+    sec.replace("%IMG_STATUS%", status);
+    _webUpd.server().send(200, "text/html", webPage("/images", sec));
+  });
+  srv.on("/log", HTTP_GET, [this]() {
+    String content;
+    weblog::appendHtml(content);
+    if (content.isEmpty()) content = "(Log ist leer)";
+    String sec = WEB_SEC_LOG;
+    sec.replace("%LOG%", content);
+    _webUpd.server().send(200, "text/html", webPage("/log", sec));
+  });
+  srv.on("/log/clear", HTTP_POST, [this]() {
+    weblog::clear();
+    _webUpd.server().sendHeader("Location", "/log");
+    _webUpd.server().send(303, "text/plain", "");
+  });
 }
 
 void UiController::beginSelfUpdate() {
@@ -348,13 +407,12 @@ void UiController::beginSelfUpdate() {
   // Tears down ESP-NOW; the only way back to normal operation is a reboot.
   s_imgStore = &_images;
   _webUpd.setStoreHooks(&kStoreHooks);
-  buildWifiForm();
   if (_webUpd.begin(_selfUpdAp, ver, label, "infinitag-config")) {
+    buildWebPages();  // needs the running server for the extra routes
     _webUpd.server().on("/wifi", HTTP_POST, [this]() {
       WebServer &srv = _webUpd.server();
       NetUpdater::setWifiCredentials(srv.arg("ssid").c_str(),
                                      srv.arg("pass").c_str());
-      buildWifiForm();  // root page must show the new SSID right away
       String body = "Verbunden wird mit: <b>";
       body += srv.arg("ssid");
       body += "</b> &ndash; genutzt beim n&auml;chsten "
@@ -407,6 +465,9 @@ bool UiController::beginPush(const Device &d) {
     _pushFile.close();
     return false;
   }
+  logf("[PUSH] -> %02X%02X%02X: v%u.%u.%u, %u Bytes, CRC %08X\n", d.mac[3],
+       d.mac[4], d.mac[5], img.major, img.minor, img.patch,
+       (unsigned)crcBytes, (unsigned)crc);
   return true;
 }
 
@@ -418,6 +479,7 @@ void UiController::bulkNext() {
     if (!d) {  // done
       snprintf(_pushResult, sizeof(_pushResult), "OK:%u Fehl:%u Akt:%u",
                _bulkOk, _bulkFail, _bulkSkip);
+      logf("[PUSH] Sammel-Update fertig: %s\n", _pushResult);
       _pushPhase = 2;
       _dirty = true;
       return;
@@ -495,6 +557,7 @@ void UiController::runNetUpdate() {
   }
 
   s_netUi = this;
+  logf("[NET] Internet-Update gestartet\n");
   esp_now_deinit();  // leave the ESP-NOW world; way back = reboot
 
   NetUpdater net;
@@ -551,6 +614,8 @@ void UiController::runNetUpdate() {
   if (staNew) {
     snprintf(s_netLine, sizeof(s_netLine), "Lade Station-Image");
     netScreen(s_netLine);
+    logf("[NET] Lade Station-Image v%u.%u.%u\n", relSta.major, relSta.minor,
+         relSta.patch);
     if (!net.downloadToStore(relSta, _images, netProgress)) {
       netScreen("Station-Image Fehler", net.lastError(), nullptr,
                 "Taste = Neustart");
@@ -561,6 +626,8 @@ void UiController::runNetUpdate() {
   if (tgtNew) {
     snprintf(s_netLine, sizeof(s_netLine), "Lade Target-Image");
     netScreen(s_netLine);
+    logf("[NET] Lade Target-Image v%u.%u.%u\n", relTgt.major, relTgt.minor,
+         relTgt.patch);
     if (!net.downloadToStore(relTgt, _images, netProgress)) {
       netScreen("Target-Image Fehler", net.lastError(), nullptr,
                 "Taste = Neustart");
@@ -573,6 +640,8 @@ void UiController::runNetUpdate() {
   if (boxNew) {
     snprintf(s_netLine, sizeof(s_netLine), "Box-Update laeuft");
     netScreen(s_netLine, "NICHT ausschalten!");
+    logf("[NET] Box-Selbst-Update auf v%u.%u.%u\n", relBox.major,
+         relBox.minor, relBox.patch);
     if (net.selfUpdate(relBox, netProgress)) {
       netScreen("Box-Update OK", "Neustart...");
     } else {
@@ -629,6 +698,8 @@ void UiController::onPacket(const RxPacket &rx) {
         DiscoverReply r;
         decodeDiscoverReply(p.payload, r);
         if (DeviceRegistry::versionKey(r) >= _pushImgKey) {
+          logf("[PUSH] Geraet zurueck: v%u.%u.%u\n", r.fw_major, r.fw_minor,
+               r.fw_patch);
           if (_bulk) {
             _bulkOk++;
             bulkNext();
@@ -1047,11 +1118,13 @@ void UiController::handleTimers() {
       _pushTx.loop();
       _dirty = true;  // live progress
       if (_pushTx.state() == EspNowPushSender::DONE) {
+        logf("[PUSH] Uebertragung komplett, warte auf Reboot\n");
         _pushFile.close();
         _pushPhase = 1;
         _pushWaitMs = 0;
         _pushDeadline = now + 25000;
       } else if (_pushTx.state() == EspNowPushSender::FAILED) {
+        logf("[PUSH] Fehler (Code %u)\n", _pushTx.finalStatus());
         _pushFile.close();
         if (_bulk) {
           _bulkFail++;
@@ -1068,6 +1141,7 @@ void UiController::handleTimers() {
         sendDiscoverReq(_editDev.deviceType);
       }
       if (now >= _pushDeadline) {
+        logf("[PUSH] Keine Rueckmeldung vom Geraet\n");
         if (_bulk) {
           _bulkFail++;
           bulkNext();

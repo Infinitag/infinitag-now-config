@@ -4,6 +4,7 @@
 
 #include "FwMarker.h"
 #include "InfinitagNow.h"
+#include "WebLog.h"
 
 static const char *TMP_PATH = "/img/upload.tmp";
 
@@ -45,7 +46,7 @@ bool ImageStore::begin() {
   static const bool init = markerPrefixInit();
   (void)init;
   if (!LittleFS.begin(true)) {
-    Serial.println("[IMG] LittleFS nicht mountbar!");
+    logf("[IMG] LittleFS nicht mountbar!\n");
     return false;
   }
   LittleFS.mkdir("/img");
@@ -56,9 +57,8 @@ bool ImageStore::begin() {
     if (LittleFS.exists(path(t)) && scanFile(path(t), probe) &&
         probe.deviceType == t) {
       *slot(t) = probe;
-      Serial.printf("[IMG] Image Typ %u: v%u.%u.%u (%u Bytes)\n", t,
-                    probe.major, probe.minor, probe.patch,
-                    (unsigned)probe.size);
+      logf("[IMG] Image Typ %u: v%u.%u.%u (%u Bytes)\n", t, probe.major,
+           probe.minor, probe.patch, (unsigned)probe.size);
     }
   }
   return true;
@@ -203,6 +203,6 @@ bool ImageStore::uploadEnd(bool ok) {
   snprintf(_result, sizeof(_result), "%s v%u.%u.%u (%u KB) gespeichert",
            _markerType == inow::DEV_STATION ? "Station" : "Target",
            _markerMaj, _markerMin, _markerPat, (unsigned)(size / 1024));
-  Serial.printf("[IMG] %s\n", _result);
+  logf("[IMG] %s\n", _result);
   return true;
 }
