@@ -14,6 +14,7 @@
 #include "EspNowService.h"
 #include "InputController.h"
 #include "UiController.h"
+#include "WebLog.h"
 
 // Firmware identity for the image store / ESP-NOW push (Doc 21 E1).
 INOW_FW_MARKER(inow::DEV_CONFIG_BOX, cfg::FW_MAJOR, cfg::FW_MINOR,
@@ -26,6 +27,9 @@ static UiController gUi(gNet, gRegistry, gInput);
 
 void setup() {
   Serial.begin(115200);  // USB-CDC, no waiting: box must boot without host
+  weblog::begin();       // before anything logs; survives soft reboots
+  logf("=== Boot v%u.%u.%u (Reset %d) ===\n", cfg::FW_MAJOR, cfg::FW_MINOR,
+       cfg::FW_PATCH, (int)esp_reset_reason());
 
   gInput.begin();
 
@@ -33,11 +37,11 @@ void setup() {
   gUi.begin();
 
   if (!gNet.begin(cfg::ESPNOW_CHANNEL)) {
-    Serial.println("[ERR] ESP-NOW init failed");
+    logf("[ERR] ESP-NOW init failed\n");
   } else {
-    Serial.printf("[OK] Config-Box up, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
-                  gNet.ownMac()[0], gNet.ownMac()[1], gNet.ownMac()[2],
-                  gNet.ownMac()[3], gNet.ownMac()[4], gNet.ownMac()[5]);
+    logf("[OK] Config-Box up, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
+         gNet.ownMac()[0], gNet.ownMac()[1], gNet.ownMac()[2],
+         gNet.ownMac()[3], gNet.ownMac()[4], gNet.ownMac()[5]);
   }
 }
 

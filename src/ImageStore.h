@@ -26,11 +26,16 @@ class ImageStore {
   const ImageInfo &info(uint8_t deviceType) const;
   uint32_t versionKey(uint8_t deviceType) const;  // 0 = no image
   bool remove(uint8_t deviceType);
+  // Format the FS (it holds nothing but this store) and reset both
+  // slots - the remedy for orphaned blocks a remove() cannot reach.
+  void wipeAll();
   static const char *path(uint8_t deviceType);  // nullptr for other types
 
   // Streaming upload target (wired into WebUpdateService::StoreHooks).
   bool uploadBegin();
   bool uploadWrite(const uint8_t *data, size_t len);
+  void uploadSync();        // fsync+close the temp fd; call BEFORE the
+                            // transport teardown (it closes foreign fds)
   bool uploadEnd(bool ok);  // verify marker, move into the type's slot
   const char *resultText() const { return _result; }
 
@@ -42,7 +47,8 @@ class ImageStore {
   ImageInfo *slot(uint8_t deviceType);
 
   ImageInfo _station, _target;
-  File _tmp;
+  int _fd = -1;         // raw VFS fd of the upload temp file
+  bool _uploadActive = false;
   size_t _rxBytes = 0;  // bytes accepted by uploadWrite (authoritative size)
   char _result[64] = "";
 

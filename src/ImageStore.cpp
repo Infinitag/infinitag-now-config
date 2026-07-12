@@ -1,11 +1,19 @@
 #include "ImageStore.h"
 
 #include <LittleFS.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "FwMarker.h"
 #include "InfinitagNow.h"
+#include "WebLog.h"
 
 static const char *TMP_PATH = "/img/upload.tmp";
+// Full VFS path (LittleFS default mount point) for the raw POSIX file
+// API - the upload bypasses Arduino File/stdio on purpose: the stdio
+// buffer layer lost the final partial block of large streams silently
+// (File::close() is void), raw write/fsync/close report every error.
+static const char *TMP_VFS_PATH = "/littlefs/img/upload.tmp";
 
 // Assembled at runtime from the split prefix so this binary does not
 // contain the contiguous marker pattern (it would match itself).
@@ -45,7 +53,7 @@ bool ImageStore::begin() {
   static const bool init = markerPrefixInit();
   (void)init;
   if (!LittleFS.begin(true)) {
-    Serial.println("[IMG] LittleFS nicht mountbar!");
+    logf("[IMG] LittleFS nicht mountbar!\n");
     return false;
   }
   LittleFS.mkdir("/img");
@@ -56,9 +64,8 @@ bool ImageStore::begin() {
     if (LittleFS.exists(path(t)) && scanFile(path(t), probe) &&
         probe.deviceType == t) {
       *slot(t) = probe;
-      Serial.printf("[IMG] Image Typ %u: v%u.%u.%u (%u Bytes)\n", t,
-                    probe.major, probe.minor, probe.patch,
-                    (unsigned)probe.size);
+      logf("[IMG] Image Typ %u: v%u.%u.%u (%u Bytes)\n", t, probe.major,
+           probe.minor, probe.patch, (unsigned)probe.size);
     }
   }
   return true;
@@ -131,37 +138,84 @@ bool ImageStore::scanFile(const char *p, ImageInfo &out) {
 
 // --- streaming upload (StoreHooks) ---------------------------------------------
 
+void ImageStore::wipeAll() {
+  _station = ImageInfo{};
+  _target = ImageInfo{};
+  logf("[IMG] Formatiere FS (%u KB belegt)\n",
+       (unsigned)(LittleFS.usedBytes() / 1024));
+  LittleFS.format();  // box FS holds nothing but the image store
+  LittleFS.mkdir("/img");
+  logf("[IMG] Format fertig, %u KB belegt\n",
+       (unsigned)(LittleFS.usedBytes() / 1024));
+}
+
 bool ImageStore::uploadBegin() {
-  // Single-slot store: the 1.5 MB FS holds one image at a time – drop
+  // Single-slot store: the 1.5 MB FS holds one image at a time - drop
   // everything stored so tmp + old image never exceed the partition.
-  remove(inow::DEV_STATION);
-  remove(inow::DEV_TARGET);
+  // Remove by PATH, not via remove(): after a broken write a file can
+  // exist on disk while its slot is empty (boot scan found no marker)
+  // and would silently eat the partition forever.
+  _station = ImageInfo{};
+  _target = ImageInfo{};
+  LittleFS.remove(path(inow::DEV_STATION));
+  LittleFS.remove(path(inow::DEV_TARGET));
   LittleFS.remove(TMP_PATH);
-  _tmp = LittleFS.open(TMP_PATH, "w");
-  if (!_tmp) {
+  // Store is empty now; substantial usage left = orphaned blocks from a
+  // corrupt entry that remove() cannot reach -> only a format helps.
+  if (LittleFS.usedBytes() > 64 * 1024) wipeAll();
+  LittleFS.mkdir("/img");
+
+  _fd = ::open(TMP_VFS_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (_fd < 0) {
+    logf("[IMG] open fehlgeschlagen (errno %d)\n", errno);
     snprintf(_result, sizeof(_result), "Speicher voll oder FS-Fehler");
     return false;
   }
+  _uploadActive = true;
+  logf("[IMG] Upload beginnt (FS %u/%u KB belegt)\n",
+       (unsigned)(LittleFS.usedBytes() / 1024),
+       (unsigned)(LittleFS.totalBytes() / 1024));
   _rxBytes = 0;
   resetScan();
   return true;
 }
 
 bool ImageStore::uploadWrite(const uint8_t *data, size_t len) {
-  if (!_tmp) return false;
+  if (_fd < 0) return false;
   feedScan(data, len);
-  if (_tmp.write(data, len) != len) return false;
+  size_t done = 0;
+  while (done < len) {
+    const ssize_t n = ::write(_fd, data + done, len - done);
+    if (n <= 0) {
+      logf("[IMG] Schreibfehler bei %u Bytes (errno %d, FS %u/%u KB)\n",
+           (unsigned)(_rxBytes + done), errno,
+           (unsigned)(LittleFS.usedBytes() / 1024),
+           (unsigned)(LittleFS.totalBytes() / 1024));
+      return false;
+    }
+    done += (size_t)n;
+  }
   _rxBytes += len;
   return true;
 }
 
+// Sync + close with visible errors (Arduino File::close() swallows
+// them). MUST run before the transport is torn down: the TLS/socket
+// cleanup was seen closing foreign fds (errno 9 on our fsync/close) -
+// close early so a recycled fd number can never be ours.
+void ImageStore::uploadSync() {
+  if (_fd < 0) return;
+  if (fsync(_fd) != 0) logf("[IMG] fsync-Fehler (errno %d)\n", errno);
+  if (::close(_fd) != 0) logf("[IMG] close-Fehler (errno %d)\n", errno);
+  _fd = -1;
+}
+
 bool ImageStore::uploadEnd(bool ok) {
-  if (!_tmp) return false;
-  // File::size() on the open write handle returns the last committed
-  // metadata size - the unsynced tail (up to one 4 KB block) is missing.
-  // Close first, then trust the byte count from uploadWrite and verify
-  // it against the on-disk file.
-  _tmp.close();
+  if (!_uploadActive) return false;
+  _uploadActive = false;
+  uploadSync();
+  // Verify the on-disk size against the byte count from uploadWrite -
+  // the last partial block must not get lost silently.
 
   if (!ok || !_markerFound) {
     LittleFS.remove(TMP_PATH);
@@ -203,6 +257,6 @@ bool ImageStore::uploadEnd(bool ok) {
   snprintf(_result, sizeof(_result), "%s v%u.%u.%u (%u KB) gespeichert",
            _markerType == inow::DEV_STATION ? "Station" : "Target",
            _markerMaj, _markerMin, _markerPat, (unsigned)(size / 1024));
-  Serial.printf("[IMG] %s\n", _result);
+  logf("[IMG] %s\n", _result);
   return true;
 }

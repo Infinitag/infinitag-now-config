@@ -8,6 +8,7 @@
 
 #include "GithubRoots.h"
 #include "ImageStore.h"
+#include "WebLog.h"
 
 static const char *NVS_NAMESPACE = "inow-config";
 
@@ -44,7 +45,7 @@ void NetUpdater::getWifiSsid(char *out, size_t n) {
 
 void NetUpdater::setError(const char *msg) {
   strncpy(_err, msg, sizeof(_err) - 1);
-  Serial.printf("[NET] Fehler: %s\n", _err);
+  logf("[NET] Fehler: %s\n", _err);
 }
 
 bool NetUpdater::connectWifi(uint32_t timeoutMs) {
@@ -68,8 +69,8 @@ bool NetUpdater::connectWifi(uint32_t timeoutMs) {
     }
     delay(100);
   }
-  Serial.printf("[NET] WLAN verbunden: %s, IP %s\n", ssid.c_str(),
-                WiFi.localIP().toString().c_str());
+  logf("[NET] WLAN verbunden: %s, IP %s\n", ssid.c_str(),
+       WiFi.localIP().toString().c_str());
   return true;
 }
 
@@ -108,7 +109,7 @@ bool NetUpdater::fetchLatest(const char *repo, const char *assetPrefix,
   if (code != HTTP_CODE_OK) {
     http.end();
     snprintf(_err, sizeof(_err), "GitHub-API: HTTP %d (%s)", code, repo);
-    Serial.printf("[NET] Fehler: %s\n", _err);
+    logf("[NET] Fehler: %s\n", _err);
     return false;
   }
   String body = http.getString();
@@ -144,15 +145,17 @@ bool NetUpdater::fetchLatest(const char *repo, const char *assetPrefix,
   out.major = (uint8_t)maj;
   out.minor = (uint8_t)min;
   out.patch = (uint8_t)pat;
-  Serial.printf("[NET] %s: v%u.%u.%u\n", repo, maj, min, pat);
+  logf("[NET] %s: v%u.%u.%u\n", repo, maj, min, pat);
   return true;
 }
 
-// Shared streaming download; sink returns false to abort.
-template <typename WriteFn>
+// Shared streaming download; sink returns false to abort. finishFn runs
+// right after the transfer, BEFORE http.end()/TLS teardown - the sink
+// must close its file there (the teardown closes foreign fds).
+template <typename WriteFn, typename FinishFn>
 static bool streamDownload(const char *url, char *err, size_t errLen,
                            NetUpdater::ProgressFn progress, size_t *totalOut,
-                           WriteFn writeFn) {
+                           WriteFn writeFn, FinishFn finishFn) {
   WiFiClientSecure client;
   client.setCACert(GITHUB_ROOT_CAS);
 
@@ -160,13 +163,16 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
   http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);  // asset -> CDN
   if (!http.begin(client, url)) {
     snprintf(err, errLen, "HTTP-Init fehlgeschlagen");
+    logf("[NET] Fehler: %s\n", err);
     return false;
   }
   http.addHeader("User-Agent", "infinitag-config");
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
+    finishFn();
     http.end();
     snprintf(err, errLen, "Download: HTTP %d", code);
+    logf("[NET] Fehler: %s\n", err);
     return false;
   }
 
@@ -183,8 +189,10 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
                                                                : avail);
       if (n <= 0) break;
       if (!writeFn(buf, (size_t)n)) {
+        finishFn();
         http.end();
         snprintf(err, errLen, "Schreibfehler");
+        logf("[NET] Fehler: %s\n", err);
         return false;
       }
       done += (size_t)n;
@@ -195,11 +203,15 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
       delay(1);
     }
   }
+  finishFn();  // close the sink while the connection still owns its fds
   http.end();
   if (len > 0 && done != (size_t)len) {
     snprintf(err, errLen, "Download unvollstaendig");
+    logf("[NET] Fehler: %s (%u von %u Bytes)\n", err, (unsigned)done,
+         (unsigned)len);
     return false;
   }
+  logf("[NET] Download komplett: %u Bytes\n", (unsigned)done);
   return true;
 }
 
@@ -212,7 +224,8 @@ bool NetUpdater::downloadToStore(const ReleaseInfo &rel, ImageStore &store,
   size_t total = 0;
   const bool ok = streamDownload(
       rel.assetUrl, _err, sizeof(_err), progress, &total,
-      [&](const uint8_t *d, size_t n) { return store.uploadWrite(d, n); });
+      [&](const uint8_t *d, size_t n) { return store.uploadWrite(d, n); },
+      [&]() { store.uploadSync(); });
   if (!store.uploadEnd(ok)) {
     if (ok) setError(store.resultText());  // marker/FS problem
     return false;
@@ -229,7 +242,8 @@ bool NetUpdater::selfUpdate(const ReleaseInfo &rel, ProgressFn progress) {
       rel.assetUrl, _err, sizeof(_err), progress, nullptr,
       [&](const uint8_t *d, size_t n) {
         return Update.write(const_cast<uint8_t *>(d), n) == n;
-      });
+      },
+      []() {});  // Update.h writes to flash, no fd to protect
   if (!ok) {
     Update.abort();
     return false;
@@ -239,6 +253,6 @@ bool NetUpdater::selfUpdate(const ReleaseInfo &rel, ProgressFn progress) {
     setError("Image-Validierung fehlgeschlagen");
     return false;
   }
-  Serial.println("[NET] Self-Update geflasht, Boot-Slot gewechselt");
+  logf("[NET] Self-Update geflasht, Boot-Slot gewechselt\n");
   return true;
 }
