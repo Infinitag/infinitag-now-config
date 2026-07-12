@@ -149,11 +149,13 @@ bool NetUpdater::fetchLatest(const char *repo, const char *assetPrefix,
   return true;
 }
 
-// Shared streaming download; sink returns false to abort.
-template <typename WriteFn>
+// Shared streaming download; sink returns false to abort. finishFn runs
+// right after the transfer, BEFORE http.end()/TLS teardown - the sink
+// must close its file there (the teardown closes foreign fds).
+template <typename WriteFn, typename FinishFn>
 static bool streamDownload(const char *url, char *err, size_t errLen,
                            NetUpdater::ProgressFn progress, size_t *totalOut,
-                           WriteFn writeFn) {
+                           WriteFn writeFn, FinishFn finishFn) {
   WiFiClientSecure client;
   client.setCACert(GITHUB_ROOT_CAS);
 
@@ -167,6 +169,7 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
   http.addHeader("User-Agent", "infinitag-config");
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
+    finishFn();
     http.end();
     snprintf(err, errLen, "Download: HTTP %d", code);
     logf("[NET] Fehler: %s\n", err);
@@ -186,6 +189,7 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
                                                                : avail);
       if (n <= 0) break;
       if (!writeFn(buf, (size_t)n)) {
+        finishFn();
         http.end();
         snprintf(err, errLen, "Schreibfehler");
         logf("[NET] Fehler: %s\n", err);
@@ -199,6 +203,7 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
       delay(1);
     }
   }
+  finishFn();  // close the sink while the connection still owns its fds
   http.end();
   if (len > 0 && done != (size_t)len) {
     snprintf(err, errLen, "Download unvollstaendig");
@@ -219,7 +224,8 @@ bool NetUpdater::downloadToStore(const ReleaseInfo &rel, ImageStore &store,
   size_t total = 0;
   const bool ok = streamDownload(
       rel.assetUrl, _err, sizeof(_err), progress, &total,
-      [&](const uint8_t *d, size_t n) { return store.uploadWrite(d, n); });
+      [&](const uint8_t *d, size_t n) { return store.uploadWrite(d, n); },
+      [&]() { store.uploadSync(); });
   if (!store.uploadEnd(ok)) {
     if (ok) setError(store.resultText());  // marker/FS problem
     return false;
@@ -236,7 +242,8 @@ bool NetUpdater::selfUpdate(const ReleaseInfo &rel, ProgressFn progress) {
       rel.assetUrl, _err, sizeof(_err), progress, nullptr,
       [&](const uint8_t *d, size_t n) {
         return Update.write(const_cast<uint8_t *>(d), n) == n;
-      });
+      },
+      []() {});  // Update.h writes to flash, no fd to protect
   if (!ok) {
     Update.abort();
     return false;

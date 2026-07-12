@@ -171,6 +171,7 @@ bool ImageStore::uploadBegin() {
     snprintf(_result, sizeof(_result), "Speicher voll oder FS-Fehler");
     return false;
   }
+  _uploadActive = true;
   logf("[IMG] Upload beginnt (FS %u/%u KB belegt)\n",
        (unsigned)(LittleFS.usedBytes() / 1024),
        (unsigned)(LittleFS.totalBytes() / 1024));
@@ -198,14 +199,23 @@ bool ImageStore::uploadWrite(const uint8_t *data, size_t len) {
   return true;
 }
 
-bool ImageStore::uploadEnd(bool ok) {
-  if (_fd < 0) return false;
-  // Sync + close with visible errors (Arduino File::close() swallows
-  // them), then verify the on-disk size against the byte count from
-  // uploadWrite - the last partial block must not get lost silently.
+// Sync + close with visible errors (Arduino File::close() swallows
+// them). MUST run before the transport is torn down: the TLS/socket
+// cleanup was seen closing foreign fds (errno 9 on our fsync/close) -
+// close early so a recycled fd number can never be ours.
+void ImageStore::uploadSync() {
+  if (_fd < 0) return;
   if (fsync(_fd) != 0) logf("[IMG] fsync-Fehler (errno %d)\n", errno);
   if (::close(_fd) != 0) logf("[IMG] close-Fehler (errno %d)\n", errno);
   _fd = -1;
+}
+
+bool ImageStore::uploadEnd(bool ok) {
+  if (!_uploadActive) return false;
+  _uploadActive = false;
+  uploadSync();
+  // Verify the on-disk size against the byte count from uploadWrite -
+  // the last partial block must not get lost silently.
 
   if (!ok || !_markerFound) {
     LittleFS.remove(TMP_PATH);

@@ -34,6 +34,8 @@ class ImageStore {
   // Streaming upload target (wired into WebUpdateService::StoreHooks).
   bool uploadBegin();
   bool uploadWrite(const uint8_t *data, size_t len);
+  void uploadSync();        // fsync+close the temp fd; call BEFORE the
+                            // transport teardown (it closes foreign fds)
   bool uploadEnd(bool ok);  // verify marker, move into the type's slot
   const char *resultText() const { return _result; }
 
@@ -46,6 +48,7 @@ class ImageStore {
 
   ImageInfo _station, _target;
   int _fd = -1;         // raw VFS fd of the upload temp file
+  bool _uploadActive = false;
   size_t _rxBytes = 0;  // bytes accepted by uploadWrite (authoritative size)
   char _result[64] = "";
 
