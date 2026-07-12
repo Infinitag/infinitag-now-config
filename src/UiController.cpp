@@ -84,7 +84,10 @@ void UiController::startDiscovery(uint8_t deviceType) {
   _reg.clear(deviceType);
   _discoverToken = (uint8_t)(esp_random() & 0xFF);
   if (_discoverToken == 0) _discoverToken = 1;
+  sendDiscoverReq(deviceType);
+}
 
+void UiController::sendDiscoverReq(uint8_t deviceType) {
   Packet p;
   init(p, MSG_DISCOVER_REQ, DEV_CONFIG_BOX);  // header type = sender type
   p.token = _discoverToken;
@@ -228,6 +231,9 @@ void UiController::runSelfTest(uint8_t test) {
 }
 
 void UiController::beginDeviceUpdate() {
+  _updOldVer = DeviceRegistry::versionKey(_editDev.info);
+  _updPollMs = millis();
+  _updResult[0] = '\0';
   Packet p;
   init(p, MSG_UPDATE_BEGIN, _editDev.deviceType);
   p.payload[0] = cfg::UPDATE_TIMEOUT_MIN;
@@ -273,9 +279,11 @@ void UiController::beginSelfUpdate() {
   char ver[16];
   snprintf(ver, sizeof(ver), "%u.%u.%u", cfg::FW_MAJOR, cfg::FW_MINOR,
            cfg::FW_PATCH);
+  char label[24];
+  snprintf(label, sizeof(label), "Config-Box %02X%02X%02X", m[3], m[4], m[5]);
 
   // Tears down ESP-NOW; the only way back to normal operation is a reboot.
-  if (_webUpd.begin(_selfUpdAp, ver)) {
+  if (_webUpd.begin(_selfUpdAp, ver, label, "infinitag-config")) {
     _selfUpd = SELFUPD_ACTIVE;
     _selfUpdDeadline = millis() + cfg::SELF_UPDATE_TIMEOUT_MS;
   } else {
@@ -306,6 +314,22 @@ void UiController::onPacket(const RxPacket &rx) {
       if (p.token == _discoverToken || p.token == 0) {
         _reg.upsert(rx.mac, p);
         if (_screen == SCR_DEVICE_LIST) _dirty = true;
+      }
+      // Update screen: the device rebooted back onto ESP-NOW – compare
+      // versions and show the outcome before returning to the list.
+      if (_screen == SCR_DEV_UPDATE && _updState == UPD_ACTIVE &&
+          memcmp(rx.mac, _editDev.mac, 6) == 0) {
+        DiscoverReply r;
+        decodeDiscoverReply(p.payload, r);
+        if (DeviceRegistry::versionKey(r) > _updOldVer) {
+          snprintf(_updResult, sizeof(_updResult), "Update OK: v%u.%u.%u",
+                   r.fw_major, r.fw_minor, r.fw_patch);
+        } else {
+          snprintf(_updResult, sizeof(_updResult), "Zurueck, unveraendert");
+        }
+        _updState = UPD_DEVICE_BACK;
+        _updBackMs = millis();
+        _dirty = true;
       }
       break;
 
@@ -611,6 +635,18 @@ void UiController::handleTimers() {
     _dirty = true;
   }
 
+  // device update: poll until the device reboots back onto ESP-NOW,
+  // then show the result for a moment and return to the list
+  if (_screen == SCR_DEV_UPDATE) {
+    if (_updState == UPD_ACTIVE && now - _updPollMs >= 3000) {
+      _updPollMs = now;
+      sendDiscoverReq(_editDev.deviceType);
+    }
+    if (_updState == UPD_DEVICE_BACK && now - _updBackMs >= 4000) {
+      gotoScreen(SCR_DEVICE_LIST);
+    }
+  }
+
   // self-test: no DEBUG_RESULT within the deadline
   if (_selfRunning != 0 && now >= _selfDeadline) {
     _selfResult[_selfRunning - 1] = '?';  // keine Antwort
@@ -890,9 +926,15 @@ void UiController::render() {
           break;
         case UPD_ACTIVE:
           _oled.drawStr(0, 24, "Geraet im Update-Modus");
-          _oled.drawStr(0, 36, "WLAN:");
-          _oled.drawStr(0, 46, ap);
-          _oled.drawStr(0, 56, "http://192.168.4.1");
+          _oled.drawStr(0, 34, "WLAN:");
+          _oled.drawStr(0, 44, ap);
+          _oled.drawStr(0, 54, "http://192.168.4.1");
+          drawFooter("warte auf Neustart...");
+          break;
+        case UPD_DEVICE_BACK:
+          _oled.drawStr(0, 30, "Geraet wieder da:");
+          _oled.drawStr(0, 42, _updResult);
+          drawFooter("zurueck zur Liste...");
           break;
       }
       break;
