@@ -2,7 +2,11 @@
 
 #include <esp_system.h>  // esp_random()
 
+#include <LittleFS.h>
+#include <esp_now.h>
+
 #include "Config.h"
+#include "NetUpdater.h"
 #include "SoundCatalog.h"
 
 using namespace inow;
@@ -18,15 +22,16 @@ static constexpr uint8_t MAIN_COUNT = 4;
 // Device menu (after picking a device from the list)
 static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
                                         "Sound testen", "Selbsttest",
-                                        "Update (OTA)"};
-static constexpr uint8_t DEVMENU_STATION_COUNT = 5;
+                                        "Update (Funk)", "Update (OTA)"};
+static constexpr uint8_t DEVMENU_STATION_COUNT = 6;
 static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
-                                       "Update (OTA)"};
-static constexpr uint8_t DEVMENU_TARGET_COUNT = 3;
+                                       "Update (Funk)", "Update (OTA)"};
+static constexpr uint8_t DEVMENU_TARGET_COUNT = 4;
 
-static const char *TOOLS_ITEMS[] = {"< Zurueck", "Firmware-Info",
-                                    "Update-Modus", "Versions-Memo Reset"};
-static constexpr uint8_t TOOLS_COUNT = 4;
+static const char *TOOLS_ITEMS[] = {"< Zurueck", "Nach Updates suchen",
+                                    "Firmware-Info", "Update-Modus",
+                                    "Geraete-Images", "Versions-Memo Reset"};
+static constexpr uint8_t TOOLS_COUNT = 6;
 
 // Self-test rows: 0 = back, 1 = run all, 2..6 = tests 1..5 (DebugTest ids).
 static const char *SELFTEST_ITEMS[] = {"< Zurueck",  "Alle testen",
@@ -47,6 +52,13 @@ UiController::UiController(EspNowService &net, DeviceRegistry &reg,
 
 void UiController::begin() {
   _memo.load();
+  if (_images.begin()) {
+    // stored image versions count as "seen" (stage 2 of the '^' marker)
+    for (uint8_t t : {(uint8_t)DEV_STATION, (uint8_t)DEV_TARGET}) {
+      const uint32_t k = _images.versionKey(t);
+      if (k) _memo.note(t, k);
+    }
+  }
   _oled.begin();
   _oled.setFont(u8g2_font_6x10_tf);
   gotoScreen(SCR_MAIN);
@@ -73,6 +85,23 @@ void UiController::gotoScreen(Screen s) {
       break;
     case SCR_DEV_UPDATE:
       beginDeviceUpdate();
+      break;
+    case SCR_PUSH:
+      if (!beginPush(_editDev)) {
+        snprintf(_pushResult, sizeof(_pushResult), "Kein Image geladen!");
+        _pushPhase = 2;
+      }
+      break;
+    case SCR_BULK:
+      _bulk = true;
+      _bulkPos = 0;
+      _bulkOk = _bulkFail = _bulkSkip = 0;
+      if (!_images.info(_listType).present) {
+        snprintf(_pushResult, sizeof(_pushResult), "Kein Image geladen!");
+        _pushPhase = 2;
+      } else {
+        bulkNext();
+      }
       break;
     case SCR_SELF_UPDATE:
       beginSelfUpdate();
@@ -266,6 +295,17 @@ float UiController::readVbat() const {
   return (mvAcc / 8) * cfg::VBAT_DIVIDER / 1000.0f;
 }
 
+// StoreHooks bridge (WebUpdateService callbacks are plain C functions).
+static ImageStore *s_imgStore = nullptr;
+static bool storeBegin(const char *) { return s_imgStore->uploadBegin(); }
+static bool storeWrite(const uint8_t *d, size_t n) {
+  return s_imgStore->uploadWrite(d, n);
+}
+static bool storeEnd(bool ok) { return s_imgStore->uploadEnd(ok); }
+static const char *storeResult() { return s_imgStore->resultText(); }
+static const StoreHooks kStoreHooks = {storeBegin, storeWrite, storeEnd,
+                                       storeResult};
+
 void UiController::beginSelfUpdate() {
   // Battery gate: never start flashing on a nearly empty pack. Readings
   // below 3.0 V mean "no battery / USB powered" and are fine.
@@ -285,12 +325,250 @@ void UiController::beginSelfUpdate() {
   snprintf(label, sizeof(label), "Config-Box %02X%02X%02X", m[3], m[4], m[5]);
 
   // Tears down ESP-NOW; the only way back to normal operation is a reboot.
+  s_imgStore = &_images;
+  _webUpd.setStoreHooks(&kStoreHooks);
+  char curSsid[33] = "";
+  NetUpdater::getWifiSsid(curSsid, sizeof(curSsid));
+  _wifiFormHtml =
+      "<hr><h3>WLAN f&uuml;r Internet-Updates</h3>"
+      "<p>Aktuell: <b>";
+  _wifiFormHtml += curSsid[0] ? curSsid : "nicht konfiguriert";
+  _wifiFormHtml +=
+      "</b></p><form method='POST' action='/wifi'>"
+      "<p><input name='ssid' placeholder='SSID' required></p>"
+      "<p><input name='pass' type='password' placeholder='Passwort'></p>"
+      "<p><input type='submit' value='WLAN speichern'></p></form>";
+  _webUpd.setExtraHtml(_wifiFormHtml.c_str());
   if (_webUpd.begin(_selfUpdAp, ver, label, "infinitag-config")) {
+    _webUpd.server().on("/wifi", HTTP_POST, [this]() {
+      WebServer &srv = _webUpd.server();
+      NetUpdater::setWifiCredentials(srv.arg("ssid").c_str(),
+                                     srv.arg("pass").c_str());
+      srv.send(200, "text/html",
+               "<h2>WLAN gespeichert.</h2><p><a href='/'>Zur&uuml;ck</a></p>");
+    });
     _selfUpd = SELFUPD_ACTIVE;
     _selfUpdDeadline = millis() + cfg::SELF_UPDATE_TIMEOUT_MS;
   } else {
     rebootWithScreen("AP-Fehler");  // radio state is undefined now
   }
+}
+
+// ---------------------------------------------------------------------------
+// ESP-NOW firmware push (Doc 21 E3) + bulk mode (E4)
+// ---------------------------------------------------------------------------
+
+// random-access reader for the push sender (LittleFS file)
+static size_t pushRead(void *ctx, uint32_t offset, uint8_t *buf, size_t len) {
+  File *f = (File *)ctx;
+  if (!f->seek(offset)) return 0;
+  return f->read(buf, len);
+}
+
+bool UiController::beginPush(const Device &d) {
+  const ImageInfo &img = _images.info(d.deviceType);
+  if (!img.present) return false;
+
+  _pushFile = LittleFS.open(ImageStore::path(d.deviceType), "r");
+  if (!_pushFile) return false;
+
+  // CRC once over the file (bitwise, ~0.5 s per MB on the C3)
+  uint32_t crc = 0;
+  uint8_t buf[1024];
+  while (_pushFile.available()) {
+    const int n = _pushFile.read(buf, sizeof(buf));
+    if (n <= 0) break;
+    crc = crc32(crc, buf, (size_t)n);
+  }
+
+  _pushImgKey = _images.versionKey(d.deviceType);
+  _pushPhase = 0;
+  _pushResult[0] = '\0';
+  if (!_pushTx.start(&_net, d.mac, pushRead, &_pushFile, img.size, crc,
+                     img.major, img.minor, img.patch)) {
+    _pushFile.close();
+    return false;
+  }
+  return true;
+}
+
+// advance the bulk queue to the next outdated device of _listType
+void UiController::bulkNext() {
+  const uint32_t imgKey = _images.versionKey(_listType);
+  for (;; _bulkPos++) {
+    Device *d = _reg.byIndex(_listType, _bulkPos);
+    if (!d) {  // done
+      snprintf(_pushResult, sizeof(_pushResult), "OK:%u Fehl:%u Akt:%u",
+               _bulkOk, _bulkFail, _bulkSkip);
+      _pushPhase = 2;
+      _dirty = true;
+      return;
+    }
+    if (DeviceRegistry::versionKey(d->info) >= imgKey) {
+      _bulkSkip++;
+      continue;  // already up to date
+    }
+    _editDev = *d;
+    _bulkPos++;
+    if (beginPush(_editDev)) {
+      _dirty = true;
+      return;
+    }
+    _bulkFail++;  // image/file problem – counts as failure, try next
+  }
+}
+
+// ---------------------------------------------------------------------------
+// guided net update (Doc 21 E2) – blocking, always ends in ESP.restart()
+// ---------------------------------------------------------------------------
+
+void UiController::netScreen(const char *l1, const char *l2, const char *l3,
+                             const char *footer) {
+  _oled.clearBuffer();
+  drawTitle("Internet-Update");
+  if (l1) _oled.drawStr(0, 28, l1);
+  if (l2) _oled.drawStr(0, 40, l2);
+  if (l3) _oled.drawStr(0, 52, l3);
+  if (footer) drawFooter(footer);
+  _oled.sendBuffer();
+}
+
+// progress callback bridge (plain function pointer)
+static UiController *s_netUi = nullptr;
+static char s_netLine[24];
+static void netProgress(size_t done, size_t total) {
+  static uint32_t lastMs = 0;
+  if (millis() - lastMs < 250) return;
+  lastMs = millis();
+  char line[24];
+  if (total > 0) {
+    snprintf(line, sizeof(line), "%u%% (%u KB)",
+             (unsigned)(done * 100 / total), (unsigned)(done / 1024));
+  } else {
+    snprintf(line, sizeof(line), "%u KB", (unsigned)(done / 1024));
+  }
+  s_netUi->netScreen(s_netLine, line);
+}
+
+// wait for encoder push (true) or K1 (false)
+bool uiWaitConfirm(InputController &in) {
+  for (;;) {
+    in.poll();
+    if (in.takePress(BTN_ENC) || in.takePress(BTN_K4)) return true;
+    if (in.takePress(BTN_K1)) return false;
+    delay(10);
+  }
+}
+
+void UiController::runNetUpdate() {
+  // battery gate as with the SoftAP update mode
+  const float vbat = readVbat();
+  if (vbat > 3.0f && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
+    netScreen("Akku zu leer!", "(min. 3.6 V oder USB)", nullptr,
+              "Taste = Zurueck");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+  if (!NetUpdater::hasWifiCredentials()) {
+    netScreen("Kein WLAN konfiguriert", "Tools > Update-Modus:", 
+              "WLAN dort speichern", "Taste = Neustart");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+
+  s_netUi = this;
+  esp_now_deinit();  // leave the ESP-NOW world; way back = reboot
+
+  NetUpdater net;
+  netScreen("Verbinde WLAN...");
+  if (!net.connectWifi()) {
+    netScreen("WLAN fehlgeschlagen", net.lastError(), nullptr,
+              "Taste = Neustart");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+
+  netScreen("Frage GitHub ab...");
+  ReleaseInfo relBox, relSta, relTgt;
+  net.fetchLatest("infinitag-now-config", "infinitag-config", relBox);
+  net.fetchLatest("infinitag-now-station", "infinitag-station", relSta);
+  net.fetchLatest("infinitag-now-target", "infinitag-target", relTgt);
+
+  const uint32_t ownKey = ((uint32_t)cfg::FW_MAJOR << 16) |
+                          ((uint32_t)cfg::FW_MINOR << 8) | cfg::FW_PATCH;
+  const bool boxNew = relBox.ok && NetUpdater::versionKey(relBox) > ownKey;
+  const bool staNew =
+      relSta.ok &&
+      NetUpdater::versionKey(relSta) > _images.versionKey(DEV_STATION);
+  const bool tgtNew =
+      relTgt.ok &&
+      NetUpdater::versionKey(relTgt) > _images.versionKey(DEV_TARGET);
+
+  char l1[24], l2[24], l3[24];
+  if (relBox.ok)
+    snprintf(l1, sizeof(l1), "Box:     v%u.%u.%u%s", relBox.major,
+             relBox.minor, relBox.patch, boxNew ? " NEU" : " ok");
+  else
+    snprintf(l1, sizeof(l1), "Box:     Fehler");
+  if (relSta.ok)
+    snprintf(l2, sizeof(l2), "Station: v%u.%u.%u%s", relSta.major,
+             relSta.minor, relSta.patch, staNew ? " NEU" : " ok");
+  else
+    snprintf(l2, sizeof(l2), "Station: --");
+  if (relTgt.ok)
+    snprintf(l3, sizeof(l3), "Target:  v%u.%u.%u%s", relTgt.major,
+             relTgt.minor, relTgt.patch, tgtNew ? " NEU" : " ok");
+  else
+    snprintf(l3, sizeof(l3), "Target:  --");
+
+  if (!boxNew && !staNew && !tgtNew) {
+    netScreen(l1, l2, l3, "Alles aktuell! Taste=Neustart");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+  netScreen(l1, l2, l3, "Push=Laden  K1=Abbruch");
+  if (!uiWaitConfirm(_in)) ESP.restart();
+
+  // 1) device images into the store (survive the self-update reboot)
+  if (staNew) {
+    snprintf(s_netLine, sizeof(s_netLine), "Lade Station-Image");
+    netScreen(s_netLine);
+    if (!net.downloadToStore(relSta, _images, netProgress)) {
+      netScreen("Station-Image Fehler", net.lastError(), nullptr,
+                "Taste = Neustart");
+      uiWaitConfirm(_in);
+      ESP.restart();
+    }
+  }
+  if (tgtNew) {
+    snprintf(s_netLine, sizeof(s_netLine), "Lade Target-Image");
+    netScreen(s_netLine);
+    if (!net.downloadToStore(relTgt, _images, netProgress)) {
+      netScreen("Target-Image Fehler", net.lastError(), nullptr,
+                "Taste = Neustart");
+      uiWaitConfirm(_in);
+      ESP.restart();
+    }
+  }
+
+  // 2) own firmware last – reboot follows immediately
+  if (boxNew) {
+    snprintf(s_netLine, sizeof(s_netLine), "Box-Update laeuft");
+    netScreen(s_netLine, "NICHT ausschalten!");
+    if (net.selfUpdate(relBox, netProgress)) {
+      netScreen("Box-Update OK", "Neustart...");
+    } else {
+      netScreen("Box-Update Fehler", net.lastError(), "Alte FW bleibt.",
+                "Taste = Neustart");
+      uiWaitConfirm(_in);
+    }
+  } else {
+    netScreen("Images geladen.", "Verteilen: Geraet >", "Update (OTA)",
+              "Taste = Neustart");
+    uiWaitConfirm(_in);
+  }
+  delay(800);
+  ESP.restart();
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +604,23 @@ void UiController::onPacket(const RxPacket &rx) {
         decodeDiscoverReply(p.payload, info);
         _memo.note(p.device_type, DeviceRegistry::versionKey(info));
         if (_screen == SCR_DEVICE_LIST) _dirty = true;
+      }
+      // Push mode: device came back after the flash reboot?
+      if ((_screen == SCR_PUSH || _screen == SCR_BULK) && _pushPhase == 1 &&
+          memcmp(rx.mac, _editDev.mac, 6) == 0) {
+        DiscoverReply r;
+        decodeDiscoverReply(p.payload, r);
+        if (DeviceRegistry::versionKey(r) >= _pushImgKey) {
+          if (_bulk) {
+            _bulkOk++;
+            bulkNext();
+          } else {
+            snprintf(_pushResult, sizeof(_pushResult), "Update OK: v%u.%u.%u",
+                     r.fw_major, r.fw_minor, r.fw_patch);
+            _pushPhase = 2;
+          }
+          _dirty = true;
+        }
       }
       // Update screen: the device rebooted back onto ESP-NOW – compare
       // versions and show the outcome before returning to the list.
@@ -382,6 +677,10 @@ void UiController::onPacket(const RxPacket &rx) {
           _dirty = true;
         }
       }
+      break;
+
+    case MSG_PUSH_ACK:
+      _pushTx.onControl(rx);
       break;
 
     case MSG_UPDATE_ACK:
@@ -461,13 +760,21 @@ void UiController::handleInput() {
             case 1: enterEdit(_editDev); break;
             case 2: gotoScreen(SCR_SOUND_TEST); break;
             case 3: gotoScreen(SCR_SELF_TEST); break;
-            case 4: gotoScreen(SCR_DEV_UPDATE); break;
+            case 4:
+              _bulk = false;
+              gotoScreen(SCR_PUSH);
+              break;
+            case 5: gotoScreen(SCR_DEV_UPDATE); break;
           }
         } else {
           switch (_cursor) {
             case 0: gotoScreen(SCR_DEVICE_LIST); break;
             case 1: enterEdit(_editDev); break;
-            case 2: gotoScreen(SCR_DEV_UPDATE); break;
+            case 2:
+              _bulk = false;
+              gotoScreen(SCR_PUSH);
+              break;
+            case 3: gotoScreen(SCR_DEV_UPDATE); break;
           }
         }
       }
@@ -490,6 +797,8 @@ void UiController::handleInput() {
           gotoScreen(SCR_MAIN);
         } else if (_cursor == 1) {
           startDiscovery(_listType);
+        } else if (_cursor == 2) {
+          gotoScreen(SCR_BULK);  // Alle aktualisieren (Doc 21 E4)
         } else {
           Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
           if (d) {
@@ -579,15 +888,29 @@ void UiController::handleInput() {
       if (back || push) gotoScreen(SCR_DEVICE_LIST);
       break;
 
+    case SCR_PUSH:
+    case SCR_BULK:
+      if (_pushPhase == 2) {
+        if (back || push) gotoScreen(SCR_DEVICE_LIST);
+      } else if (back) {
+        // abort: the device side times out on radio silence and keeps
+        // its old firmware (incomplete images cannot boot)
+        _pushFile.close();
+        gotoScreen(SCR_DEVICE_LIST);
+      }
+      break;
+
     case SCR_TOOLS_MENU:
       if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0,
                                              TOOLS_COUNT - 1);
       if (push) {
         switch (_cursor) {
           case 0: gotoScreen(SCR_MAIN); break;
-          case 1: gotoScreen(SCR_TOOLS_INFO); break;
-          case 2: gotoScreen(SCR_SELF_UPDATE); break;
-          case 3:
+          case 1: runNetUpdate(); break;  // blocking, ends in restart
+          case 2: gotoScreen(SCR_TOOLS_INFO); break;
+          case 3: gotoScreen(SCR_SELF_UPDATE); break;
+          case 4: gotoScreen(SCR_IMAGES); break;
+          case 5:
             // forget the best-ever-seen versions (e.g. after a
             // deliberate downgrade left a stale '^' marker)
             _memo.clear();
@@ -598,6 +921,21 @@ void UiController::handleInput() {
       }
       if (back) gotoScreen(SCR_MAIN);
       break;
+
+    case SCR_IMAGES: {
+      // rows: 0 = back, 1 = station image, 2 = target image
+      if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, 2);
+      if (push) {
+        if (_cursor == 0) {
+          gotoScreen(SCR_TOOLS_MENU);
+        } else {
+          const uint8_t t = _cursor == 1 ? DEV_STATION : DEV_TARGET;
+          if (_images.remove(t)) _dirty = true;  // push on entry = delete
+        }
+      }
+      if (back) gotoScreen(SCR_TOOLS_MENU);
+      break;
+    }
 
     case SCR_SELF_UPDATE:
       if (_selfUpd == SELFUPD_REFUSED) {
@@ -683,6 +1021,45 @@ void UiController::handleTimers() {
     if (now >= _selfUpdDeadline && !_webUpd.uploadActive())
       rebootWithScreen("Timeout");
     _dirty = true;  // keep the client counter fresh
+  }
+
+  // ESP-NOW push: drive the sender / wait for the device's reboot
+  if (_screen == SCR_PUSH || _screen == SCR_BULK) {
+    if (_pushPhase == 0) {
+      _pushTx.loop();
+      _dirty = true;  // live progress
+      if (_pushTx.state() == EspNowPushSender::DONE) {
+        _pushFile.close();
+        _pushPhase = 1;
+        _pushWaitMs = 0;
+        _pushDeadline = now + 25000;
+      } else if (_pushTx.state() == EspNowPushSender::FAILED) {
+        _pushFile.close();
+        if (_bulk) {
+          _bulkFail++;
+          bulkNext();
+        } else {
+          snprintf(_pushResult, sizeof(_pushResult), "Fehler (Code %u)",
+                   _pushTx.finalStatus());
+          _pushPhase = 2;
+        }
+      }
+    } else if (_pushPhase == 1) {
+      if (now - _pushWaitMs >= 3000) {
+        _pushWaitMs = now;
+        sendDiscoverReq(_editDev.deviceType);
+      }
+      if (now >= _pushDeadline) {
+        if (_bulk) {
+          _bulkFail++;
+          bulkNext();
+        } else {
+          snprintf(_pushResult, sizeof(_pushResult), "Keine Rueckmeldung");
+          _pushPhase = 2;
+        }
+        _dirty = true;
+      }
+    }
   }
 
   // live monitor ages change the displayed seconds
@@ -798,6 +1175,7 @@ void UiController::render() {
                  Ctx *x = (Ctx *)c;
                  if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
                  if (i == 1) { snprintf(b, n, "Neu suchen"); return; }
+                 if (i == 2) { snprintf(b, n, "Alle aktualisieren"); return; }
                  Device *d = x->ui->_reg.byIndex(x->type,
                                                  i - LIST_STATIC_ROWS);
                  if (!d) { b[0] = '\0'; return; }
@@ -962,6 +1340,43 @@ void UiController::render() {
       break;
     }
 
+    case SCR_PUSH:
+    case SCR_BULK: {
+      char title[24];
+      char mac[7];
+      macSuffix(_editDev.mac, mac);
+      if (_screen == SCR_BULK)
+        snprintf(title, sizeof(title), "Alle aktualisieren");
+      else
+        snprintf(title, sizeof(title), "Funk-Update %s", mac);
+      drawTitle(title);
+
+      if (_pushPhase == 0) {
+        char line[24];
+        const size_t total = _pushTx.bytesTotal();
+        snprintf(line, sizeof(line), "Sende an %s...", mac);
+        _oled.drawStr(0, 28, line);
+        snprintf(line, sizeof(line), "%u%% (%u/%u KB)",
+                 total ? (unsigned)(_pushTx.bytesDone() * 100 / total) : 0,
+                 (unsigned)(_pushTx.bytesDone() / 1024),
+                 (unsigned)(total / 1024));
+        _oled.drawStr(0, 42, line);
+        drawFooter("K1 = Abbruch");
+      } else if (_pushPhase == 1) {
+        _oled.drawStr(0, 32, "Geflasht - warte auf");
+        _oled.drawStr(0, 44, "Neustart des Geraets");
+      } else {
+        _oled.drawStr(0, 36, _pushResult);
+        if (_screen == SCR_BULK) {
+          char line[24];
+          snprintf(line, sizeof(line), "Bericht siehe oben");
+          (void)line;
+        }
+        drawFooter("Push = Zurueck");
+      }
+      break;
+    }
+
     case SCR_TOOLS_MENU: {
       drawTitle("Tools");
       struct Ctx { const char **items; } ctx{TOOLS_ITEMS};
@@ -997,6 +1412,30 @@ void UiController::render() {
         _oled.drawStr(0, 48, buf);
         drawFooter("K1 = Abbruch (Reboot)");
       }
+      break;
+    }
+
+    case SCR_IMAGES: {
+      drawTitle("Geraete-Images");
+      struct Ctx { UiController *ui; } ctx{this};
+      drawRows(_oled, _cursor, 3,
+               [](void *c, int i, char *b, size_t n) {
+                 UiController *ui = ((Ctx *)c)->ui;
+                 if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
+                 const uint8_t t = i == 1 ? DEV_STATION : DEV_TARGET;
+                 const ImageInfo &inf = ui->_images.info(t);
+                 if (inf.present) {
+                   snprintf(b, n, "%-8s v%u.%u.%u %ukB",
+                            t == DEV_STATION ? "Station:" : "Target:",
+                            inf.major, inf.minor, inf.patch,
+                            (unsigned)(inf.size / 1024));
+                 } else {
+                   snprintf(b, n, "%-8s --",
+                            t == DEV_STATION ? "Station:" : "Target:");
+                 }
+               },
+               &ctx);
+      drawFooter("Push = loeschen");
       break;
     }
 

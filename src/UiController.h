@@ -18,7 +18,9 @@
 #include <U8g2lib.h>
 
 #include "DeviceRegistry.h"
+#include "EspNowPush.h"
 #include "EspNowService.h"
+#include "ImageStore.h"
 #include "InputController.h"
 #include "VersionMemo.h"
 #include "WebUpdateService.h"
@@ -30,6 +32,11 @@ class UiController {
   void begin();
   void tick();                      // input handling + periodic timers
   void onPacket(const RxPacket &rx);  // feed every received packet here
+
+  // simple 3-line status screen, used by the blocking net update flow
+  // (public: the C-style progress callback needs to reach it)
+  void netScreen(const char *l1, const char *l2 = nullptr,
+                 const char *l3 = nullptr, const char *footer = nullptr);
 
  private:
   // --- screens ---------------------------------------------------------------
@@ -43,15 +50,18 @@ class UiController {
     SCR_SOUND_TEST,    // pick sound + fire CFG_TEST_SOUND at chosen station
     SCR_SELF_TEST,     // remote self-test (DEBUG_CMD/DEBUG_RESULT)
     SCR_DEV_UPDATE,    // sent UPDATE_BEGIN, show the device's AP info
+    SCR_PUSH,          // ESP-NOW firmware push to _editDev (Doc 21 E3)
+    SCR_BULK,          // push to every outdated device of the list type
     SCR_LIVE_MONITOR,
     SCR_TOOLS_MENU,    // Firmware-Info / own update mode
     SCR_TOOLS_INFO,
     SCR_SELF_UPDATE,   // own SoftAP web updater (ends in reboot)
+    SCR_IMAGES,        // stored device firmware images (Doc 21 E1)
   };
 
   // Static rows before the devices in a device list:
-  // 0 = "< Zurueck", 1 = "Neu suchen"
-  static constexpr uint8_t LIST_STATIC_ROWS = 2;
+  // 0 = "< Zurueck", 1 = "Neu suchen", 2 = "Alle aktualisieren"
+  static constexpr uint8_t LIST_STATIC_ROWS = 3;
 
   // --- editing ---------------------------------------------------------------
   static constexpr size_t MAX_FIELDS = 8;
@@ -106,7 +116,13 @@ class UiController {
   void sendTestSound();
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
   void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
+  bool beginPush(const Device &d); // start the ESP-NOW push (image needed)
+  void bulkNext();                 // advance the "Alle aktualisieren" queue
   void beginSelfUpdate();          // battery check + own SoftAP updater
+  // Blocking guided flow "Nach Updates suchen" (Doc 21 E2): WLAN ->
+  // GitHub -> device images into the store -> self update. Always ends
+  // in ESP.restart().
+  void runNetUpdate();
   // Draws a final "reboot" frame (the OLED keeps showing the last frame
   // across ESP.restart(), so without this the user cannot tell that the
   // reboot happened), then restarts. Never returns.
@@ -161,6 +177,19 @@ class UiController {
   bool _selfAllMode = false;    // "Alle testen": auto-advance on result
   uint32_t _selfDeadline = 0;
 
+  // ESP-NOW push state (single device + bulk mode)
+  EspNowPushSender _pushTx;
+  File _pushFile;
+  uint32_t _pushImgKey = 0;     // version key of the pushed image
+  uint32_t _pushWaitMs = 0;     // discovery poll while waiting for reboot
+  uint32_t _pushDeadline = 0;   // give-up waiting for the device to return
+  uint8_t _pushPhase = 0;       // 0=push, 1=wait reboot, 2=result
+  char _pushResult[24] = "";
+  // bulk mode bookkeeping
+  bool _bulk = false;
+  size_t _bulkPos = 0;
+  uint8_t _bulkOk = 0, _bulkFail = 0, _bulkSkip = 0;
+
   // device update state
   UpdState _updState = UPD_WAIT_ACK;
   uint32_t _updAckDeadline = 0;
@@ -171,12 +200,16 @@ class UiController {
 
   // own update mode
   WebUpdateService _webUpd;
+  String _wifiFormHtml;  // extra form on the SoftAP page (WLAN creds)
   SelfUpdState _selfUpd = SELFUPD_OFF;
   uint32_t _selfUpdDeadline = 0;
   char _selfUpdAp[32] = "";
 
   // highest firmware version ever seen per device type (NVS)
   VersionMemo _memo;
+
+  // stored device firmware images (LittleFS, Doc 21 E1)
+  ImageStore _images;
   char _toolsMsg[24] = "";      // short-lived footer note in the tools menu
   uint32_t _toolsMsgUntil = 0;
 
