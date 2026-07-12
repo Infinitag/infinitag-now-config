@@ -77,6 +77,18 @@ Interrupt – **kein PCNT auf dem C3!** – plus 5 Tasten entprellt),
 4. Web-UI V0.2 (SoftAP, Doc 18 § 9) – bewusst zurückgestellt.
 5. Offen aus V0.1: Live-Monitor-Filter (K3), Sniffer.
 
+## Firmware-Versionen & Releases (seit 2026-07-12)
+
+- **Versionen entstehen BEWUSST, nie automatisch.** Claude zählt
+  `cfg::FW_*` in `src/Config.h` NICHT eigenmächtig bei Änderungen hoch,
+  sondern schlägt vor, wenn ein Stand release-würdig ist, und fragt nach.
+  Zwischenstände beim Basteln behalten die Version.
+- **Release-Prozess:** Version in `Config.h` erhöhen → committen →
+  `bash release.sh`. Das Skript baut, taggt `vX.Y.Z`, pusht und erstellt
+  ein **GitHub-Release mit `infinitag-config-vX.Y.Z.bin` als Download**
+  – so ist zu jeder Version die passende Firmware-Datei archiviert
+  (fürs SoftAP-Update einfach vom Release herunterladen).
+
 ## Konventionen
 
 - **Protokolländerungen nur im Core-Repo** (Code + `PROTOCOL.md` + Tests
