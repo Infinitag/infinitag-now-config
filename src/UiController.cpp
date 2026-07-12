@@ -2,7 +2,10 @@
 
 #include <esp_system.h>  // esp_random()
 
+#include <esp_now.h>
+
 #include "Config.h"
+#include "NetUpdater.h"
 #include "SoundCatalog.h"
 
 using namespace inow;
@@ -24,10 +27,10 @@ static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
                                        "Update (OTA)"};
 static constexpr uint8_t DEVMENU_TARGET_COUNT = 3;
 
-static const char *TOOLS_ITEMS[] = {"< Zurueck", "Firmware-Info",
-                                    "Update-Modus", "Geraete-Images",
-                                    "Versions-Memo Reset"};
-static constexpr uint8_t TOOLS_COUNT = 5;
+static const char *TOOLS_ITEMS[] = {"< Zurueck", "Nach Updates suchen",
+                                    "Firmware-Info", "Update-Modus",
+                                    "Geraete-Images", "Versions-Memo Reset"};
+static constexpr uint8_t TOOLS_COUNT = 6;
 
 // Self-test rows: 0 = back, 1 = run all, 2..6 = tests 1..5 (DebugTest ids).
 static const char *SELFTEST_ITEMS[] = {"< Zurueck",  "Alle testen",
@@ -306,12 +309,184 @@ void UiController::beginSelfUpdate() {
   // Tears down ESP-NOW; the only way back to normal operation is a reboot.
   s_imgStore = &_images;
   _webUpd.setStoreHooks(&kStoreHooks);
+  char curSsid[33] = "";
+  NetUpdater::getWifiSsid(curSsid, sizeof(curSsid));
+  _wifiFormHtml =
+      "<hr><h3>WLAN f&uuml;r Internet-Updates</h3>"
+      "<p>Aktuell: <b>";
+  _wifiFormHtml += curSsid[0] ? curSsid : "nicht konfiguriert";
+  _wifiFormHtml +=
+      "</b></p><form method='POST' action='/wifi'>"
+      "<p><input name='ssid' placeholder='SSID' required></p>"
+      "<p><input name='pass' type='password' placeholder='Passwort'></p>"
+      "<p><input type='submit' value='WLAN speichern'></p></form>";
+  _webUpd.setExtraHtml(_wifiFormHtml.c_str());
   if (_webUpd.begin(_selfUpdAp, ver, label, "infinitag-config")) {
+    _webUpd.server().on("/wifi", HTTP_POST, [this]() {
+      WebServer &srv = _webUpd.server();
+      NetUpdater::setWifiCredentials(srv.arg("ssid").c_str(),
+                                     srv.arg("pass").c_str());
+      srv.send(200, "text/html",
+               "<h2>WLAN gespeichert.</h2><p><a href='/'>Zur&uuml;ck</a></p>");
+    });
     _selfUpd = SELFUPD_ACTIVE;
     _selfUpdDeadline = millis() + cfg::SELF_UPDATE_TIMEOUT_MS;
   } else {
     rebootWithScreen("AP-Fehler");  // radio state is undefined now
   }
+}
+
+// ---------------------------------------------------------------------------
+// guided net update (Doc 21 E2) – blocking, always ends in ESP.restart()
+// ---------------------------------------------------------------------------
+
+void UiController::netScreen(const char *l1, const char *l2, const char *l3,
+                             const char *footer) {
+  _oled.clearBuffer();
+  drawTitle("Internet-Update");
+  if (l1) _oled.drawStr(0, 28, l1);
+  if (l2) _oled.drawStr(0, 40, l2);
+  if (l3) _oled.drawStr(0, 52, l3);
+  if (footer) drawFooter(footer);
+  _oled.sendBuffer();
+}
+
+// progress callback bridge (plain function pointer)
+static UiController *s_netUi = nullptr;
+static char s_netLine[24];
+static void netProgress(size_t done, size_t total) {
+  static uint32_t lastMs = 0;
+  if (millis() - lastMs < 250) return;
+  lastMs = millis();
+  char line[24];
+  if (total > 0) {
+    snprintf(line, sizeof(line), "%u%% (%u KB)",
+             (unsigned)(done * 100 / total), (unsigned)(done / 1024));
+  } else {
+    snprintf(line, sizeof(line), "%u KB", (unsigned)(done / 1024));
+  }
+  s_netUi->netScreen(s_netLine, line);
+}
+
+// wait for encoder push (true) or K1 (false)
+bool uiWaitConfirm(InputController &in) {
+  for (;;) {
+    in.poll();
+    if (in.takePress(BTN_ENC) || in.takePress(BTN_K4)) return true;
+    if (in.takePress(BTN_K1)) return false;
+    delay(10);
+  }
+}
+
+void UiController::runNetUpdate() {
+  // battery gate as with the SoftAP update mode
+  const float vbat = readVbat();
+  if (vbat > 3.0f && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
+    netScreen("Akku zu leer!", "(min. 3.6 V oder USB)", nullptr,
+              "Taste = Zurueck");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+  if (!NetUpdater::hasWifiCredentials()) {
+    netScreen("Kein WLAN konfiguriert", "Tools > Update-Modus:", 
+              "WLAN dort speichern", "Taste = Neustart");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+
+  s_netUi = this;
+  esp_now_deinit();  // leave the ESP-NOW world; way back = reboot
+
+  NetUpdater net;
+  netScreen("Verbinde WLAN...");
+  if (!net.connectWifi()) {
+    netScreen("WLAN fehlgeschlagen", net.lastError(), nullptr,
+              "Taste = Neustart");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+
+  netScreen("Frage GitHub ab...");
+  ReleaseInfo relBox, relSta, relTgt;
+  net.fetchLatest("infinitag-now-config", "infinitag-config", relBox);
+  net.fetchLatest("infinitag-now-station", "infinitag-station", relSta);
+  net.fetchLatest("infinitag-now-target", "infinitag-target", relTgt);
+
+  const uint32_t ownKey = ((uint32_t)cfg::FW_MAJOR << 16) |
+                          ((uint32_t)cfg::FW_MINOR << 8) | cfg::FW_PATCH;
+  const bool boxNew = relBox.ok && NetUpdater::versionKey(relBox) > ownKey;
+  const bool staNew =
+      relSta.ok &&
+      NetUpdater::versionKey(relSta) > _images.versionKey(DEV_STATION);
+  const bool tgtNew =
+      relTgt.ok &&
+      NetUpdater::versionKey(relTgt) > _images.versionKey(DEV_TARGET);
+
+  char l1[24], l2[24], l3[24];
+  if (relBox.ok)
+    snprintf(l1, sizeof(l1), "Box:     v%u.%u.%u%s", relBox.major,
+             relBox.minor, relBox.patch, boxNew ? " NEU" : " ok");
+  else
+    snprintf(l1, sizeof(l1), "Box:     Fehler");
+  if (relSta.ok)
+    snprintf(l2, sizeof(l2), "Station: v%u.%u.%u%s", relSta.major,
+             relSta.minor, relSta.patch, staNew ? " NEU" : " ok");
+  else
+    snprintf(l2, sizeof(l2), "Station: --");
+  if (relTgt.ok)
+    snprintf(l3, sizeof(l3), "Target:  v%u.%u.%u%s", relTgt.major,
+             relTgt.minor, relTgt.patch, tgtNew ? " NEU" : " ok");
+  else
+    snprintf(l3, sizeof(l3), "Target:  --");
+
+  if (!boxNew && !staNew && !tgtNew) {
+    netScreen(l1, l2, l3, "Alles aktuell! Taste=Neustart");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+  netScreen(l1, l2, l3, "Push=Laden  K1=Abbruch");
+  if (!uiWaitConfirm(_in)) ESP.restart();
+
+  // 1) device images into the store (survive the self-update reboot)
+  if (staNew) {
+    snprintf(s_netLine, sizeof(s_netLine), "Lade Station-Image");
+    netScreen(s_netLine);
+    if (!net.downloadToStore(relSta, _images, netProgress)) {
+      netScreen("Station-Image Fehler", net.lastError(), nullptr,
+                "Taste = Neustart");
+      uiWaitConfirm(_in);
+      ESP.restart();
+    }
+  }
+  if (tgtNew) {
+    snprintf(s_netLine, sizeof(s_netLine), "Lade Target-Image");
+    netScreen(s_netLine);
+    if (!net.downloadToStore(relTgt, _images, netProgress)) {
+      netScreen("Target-Image Fehler", net.lastError(), nullptr,
+                "Taste = Neustart");
+      uiWaitConfirm(_in);
+      ESP.restart();
+    }
+  }
+
+  // 2) own firmware last – reboot follows immediately
+  if (boxNew) {
+    snprintf(s_netLine, sizeof(s_netLine), "Box-Update laeuft");
+    netScreen(s_netLine, "NICHT ausschalten!");
+    if (net.selfUpdate(relBox, netProgress)) {
+      netScreen("Box-Update OK", "Neustart...");
+    } else {
+      netScreen("Box-Update Fehler", net.lastError(), "Alte FW bleibt.",
+                "Taste = Neustart");
+      uiWaitConfirm(_in);
+    }
+  } else {
+    netScreen("Images geladen.", "Verteilen: Geraet >", "Update (OTA)",
+              "Taste = Neustart");
+    uiWaitConfirm(_in);
+  }
+  delay(800);
+  ESP.restart();
 }
 
 // ---------------------------------------------------------------------------
@@ -606,10 +781,11 @@ void UiController::handleInput() {
       if (push) {
         switch (_cursor) {
           case 0: gotoScreen(SCR_MAIN); break;
-          case 1: gotoScreen(SCR_TOOLS_INFO); break;
-          case 2: gotoScreen(SCR_SELF_UPDATE); break;
-          case 3: gotoScreen(SCR_IMAGES); break;
-          case 4:
+          case 1: runNetUpdate(); break;  // blocking, ends in restart
+          case 2: gotoScreen(SCR_TOOLS_INFO); break;
+          case 3: gotoScreen(SCR_SELF_UPDATE); break;
+          case 4: gotoScreen(SCR_IMAGES); break;
+          case 5:
             // forget the best-ever-seen versions (e.g. after a
             // deliberate downgrade left a stale '^' marker)
             _memo.clear();

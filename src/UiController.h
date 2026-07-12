@@ -32,6 +32,11 @@ class UiController {
   void tick();                      // input handling + periodic timers
   void onPacket(const RxPacket &rx);  // feed every received packet here
 
+  // simple 3-line status screen, used by the blocking net update flow
+  // (public: the C-style progress callback needs to reach it)
+  void netScreen(const char *l1, const char *l2 = nullptr,
+                 const char *l3 = nullptr, const char *footer = nullptr);
+
  private:
   // --- screens ---------------------------------------------------------------
   // Device-first navigation: pick the device from the list, THEN choose an
@@ -109,6 +114,10 @@ class UiController {
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
   void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
   void beginSelfUpdate();          // battery check + own SoftAP updater
+  // Blocking guided flow "Nach Updates suchen" (Doc 21 E2): WLAN ->
+  // GitHub -> device images into the store -> self update. Always ends
+  // in ESP.restart().
+  void runNetUpdate();
   // Draws a final "reboot" frame (the OLED keeps showing the last frame
   // across ESP.restart(), so without this the user cannot tell that the
   // reboot happened), then restarts. Never returns.
@@ -173,6 +182,7 @@ class UiController {
 
   // own update mode
   WebUpdateService _webUpd;
+  String _wifiFormHtml;  // extra form on the SoftAP page (WLAN creds)
   SelfUpdState _selfUpd = SELFUPD_OFF;
   uint32_t _selfUpdDeadline = 0;
   char _selfUpdAp[32] = "";

@@ -132,6 +132,10 @@ bool ImageStore::scanFile(const char *p, ImageInfo &out) {
 // --- streaming upload (StoreHooks) ---------------------------------------------
 
 bool ImageStore::uploadBegin() {
+  // Single-slot store: the 1.5 MB FS holds one image at a time – drop
+  // everything stored so tmp + old image never exceed the partition.
+  remove(inow::DEV_STATION);
+  remove(inow::DEV_TARGET);
   LittleFS.remove(TMP_PATH);
   _tmp = LittleFS.open(TMP_PATH, "w");
   if (!_tmp) {

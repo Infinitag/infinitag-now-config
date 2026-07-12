@@ -1,7 +1,8 @@
 // Device firmware image store on the box's LittleFS (Doc 21 Etappe 1).
 //
-// Holds at most one image per device type ("/img/station.bin",
-// "/img/target.bin"). Uploads stream into a temp file while scanning for
+// Holds ONE image at a time ("/img/station.bin" OR "/img/target.bin" -
+// the 1.5 MB FS cannot fit two; a new upload replaces whatever is
+// stored). Uploads stream into a temp file while scanning for
 // the INOW_FW_MARKER; only files with a valid marker are accepted and
 // moved to their type's slot. The image versions feed the '^' marker
 // (stage 2) and are the payload source for the ESP-NOW push (Etappe 3).
