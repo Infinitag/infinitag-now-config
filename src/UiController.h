@@ -18,6 +18,7 @@
 #include <U8g2lib.h>
 
 #include "DeviceRegistry.h"
+#include "EspNowPush.h"
 #include "EspNowService.h"
 #include "ImageStore.h"
 #include "InputController.h"
@@ -49,6 +50,8 @@ class UiController {
     SCR_SOUND_TEST,    // pick sound + fire CFG_TEST_SOUND at chosen station
     SCR_SELF_TEST,     // remote self-test (DEBUG_CMD/DEBUG_RESULT)
     SCR_DEV_UPDATE,    // sent UPDATE_BEGIN, show the device's AP info
+    SCR_PUSH,          // ESP-NOW firmware push to _editDev (Doc 21 E3)
+    SCR_BULK,          // push to every outdated device of the list type
     SCR_LIVE_MONITOR,
     SCR_TOOLS_MENU,    // Firmware-Info / own update mode
     SCR_TOOLS_INFO,
@@ -57,8 +60,8 @@ class UiController {
   };
 
   // Static rows before the devices in a device list:
-  // 0 = "< Zurueck", 1 = "Neu suchen"
-  static constexpr uint8_t LIST_STATIC_ROWS = 2;
+  // 0 = "< Zurueck", 1 = "Neu suchen", 2 = "Alle aktualisieren"
+  static constexpr uint8_t LIST_STATIC_ROWS = 3;
 
   // --- editing ---------------------------------------------------------------
   static constexpr size_t MAX_FIELDS = 8;
@@ -113,6 +116,8 @@ class UiController {
   void sendTestSound();
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
   void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
+  bool beginPush(const Device &d); // start the ESP-NOW push (image needed)
+  void bulkNext();                 // advance the "Alle aktualisieren" queue
   void beginSelfUpdate();          // battery check + own SoftAP updater
   // Blocking guided flow "Nach Updates suchen" (Doc 21 E2): WLAN ->
   // GitHub -> device images into the store -> self update. Always ends
@@ -171,6 +176,19 @@ class UiController {
   uint8_t _selfRunning = 0;     // DebugTest id currently awaited, 0 = none
   bool _selfAllMode = false;    // "Alle testen": auto-advance on result
   uint32_t _selfDeadline = 0;
+
+  // ESP-NOW push state (single device + bulk mode)
+  EspNowPushSender _pushTx;
+  File _pushFile;
+  uint32_t _pushImgKey = 0;     // version key of the pushed image
+  uint32_t _pushWaitMs = 0;     // discovery poll while waiting for reboot
+  uint32_t _pushDeadline = 0;   // give-up waiting for the device to return
+  uint8_t _pushPhase = 0;       // 0=push, 1=wait reboot, 2=result
+  char _pushResult[24] = "";
+  // bulk mode bookkeeping
+  bool _bulk = false;
+  size_t _bulkPos = 0;
+  uint8_t _bulkOk = 0, _bulkFail = 0, _bulkSkip = 0;
 
   // device update state
   UpdState _updState = UPD_WAIT_ACK;

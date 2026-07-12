@@ -2,6 +2,7 @@
 
 #include <esp_system.h>  // esp_random()
 
+#include <LittleFS.h>
 #include <esp_now.h>
 
 #include "Config.h"
@@ -21,11 +22,11 @@ static constexpr uint8_t MAIN_COUNT = 4;
 // Device menu (after picking a device from the list)
 static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
                                         "Sound testen", "Selbsttest",
-                                        "Update (OTA)"};
-static constexpr uint8_t DEVMENU_STATION_COUNT = 5;
+                                        "Update (Funk)", "Update (OTA)"};
+static constexpr uint8_t DEVMENU_STATION_COUNT = 6;
 static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
-                                       "Update (OTA)"};
-static constexpr uint8_t DEVMENU_TARGET_COUNT = 3;
+                                       "Update (Funk)", "Update (OTA)"};
+static constexpr uint8_t DEVMENU_TARGET_COUNT = 4;
 
 static const char *TOOLS_ITEMS[] = {"< Zurueck", "Nach Updates suchen",
                                     "Firmware-Info", "Update-Modus",
@@ -84,6 +85,23 @@ void UiController::gotoScreen(Screen s) {
       break;
     case SCR_DEV_UPDATE:
       beginDeviceUpdate();
+      break;
+    case SCR_PUSH:
+      if (!beginPush(_editDev)) {
+        snprintf(_pushResult, sizeof(_pushResult), "Kein Image geladen!");
+        _pushPhase = 2;
+      }
+      break;
+    case SCR_BULK:
+      _bulk = true;
+      _bulkPos = 0;
+      _bulkOk = _bulkFail = _bulkSkip = 0;
+      if (!_images.info(_listType).present) {
+        snprintf(_pushResult, sizeof(_pushResult), "Kein Image geladen!");
+        _pushPhase = 2;
+      } else {
+        bulkNext();
+      }
       break;
     case SCR_SELF_UPDATE:
       beginSelfUpdate();
@@ -337,6 +355,70 @@ void UiController::beginSelfUpdate() {
 }
 
 // ---------------------------------------------------------------------------
+// ESP-NOW firmware push (Doc 21 E3) + bulk mode (E4)
+// ---------------------------------------------------------------------------
+
+// random-access reader for the push sender (LittleFS file)
+static size_t pushRead(void *ctx, uint32_t offset, uint8_t *buf, size_t len) {
+  File *f = (File *)ctx;
+  if (!f->seek(offset)) return 0;
+  return f->read(buf, len);
+}
+
+bool UiController::beginPush(const Device &d) {
+  const ImageInfo &img = _images.info(d.deviceType);
+  if (!img.present) return false;
+
+  _pushFile = LittleFS.open(ImageStore::path(d.deviceType), "r");
+  if (!_pushFile) return false;
+
+  // CRC once over the file (bitwise, ~0.5 s per MB on the C3)
+  uint32_t crc = 0;
+  uint8_t buf[1024];
+  while (_pushFile.available()) {
+    const int n = _pushFile.read(buf, sizeof(buf));
+    if (n <= 0) break;
+    crc = crc32(crc, buf, (size_t)n);
+  }
+
+  _pushImgKey = _images.versionKey(d.deviceType);
+  _pushPhase = 0;
+  _pushResult[0] = '\0';
+  if (!_pushTx.start(&_net, d.mac, pushRead, &_pushFile, img.size, crc,
+                     img.major, img.minor, img.patch)) {
+    _pushFile.close();
+    return false;
+  }
+  return true;
+}
+
+// advance the bulk queue to the next outdated device of _listType
+void UiController::bulkNext() {
+  const uint32_t imgKey = _images.versionKey(_listType);
+  for (;; _bulkPos++) {
+    Device *d = _reg.byIndex(_listType, _bulkPos);
+    if (!d) {  // done
+      snprintf(_pushResult, sizeof(_pushResult), "OK:%u Fehl:%u Akt:%u",
+               _bulkOk, _bulkFail, _bulkSkip);
+      _pushPhase = 2;
+      _dirty = true;
+      return;
+    }
+    if (DeviceRegistry::versionKey(d->info) >= imgKey) {
+      _bulkSkip++;
+      continue;  // already up to date
+    }
+    _editDev = *d;
+    _bulkPos++;
+    if (beginPush(_editDev)) {
+      _dirty = true;
+      return;
+    }
+    _bulkFail++;  // image/file problem – counts as failure, try next
+  }
+}
+
+// ---------------------------------------------------------------------------
 // guided net update (Doc 21 E2) – blocking, always ends in ESP.restart()
 // ---------------------------------------------------------------------------
 
@@ -523,6 +605,23 @@ void UiController::onPacket(const RxPacket &rx) {
         _memo.note(p.device_type, DeviceRegistry::versionKey(info));
         if (_screen == SCR_DEVICE_LIST) _dirty = true;
       }
+      // Push mode: device came back after the flash reboot?
+      if ((_screen == SCR_PUSH || _screen == SCR_BULK) && _pushPhase == 1 &&
+          memcmp(rx.mac, _editDev.mac, 6) == 0) {
+        DiscoverReply r;
+        decodeDiscoverReply(p.payload, r);
+        if (DeviceRegistry::versionKey(r) >= _pushImgKey) {
+          if (_bulk) {
+            _bulkOk++;
+            bulkNext();
+          } else {
+            snprintf(_pushResult, sizeof(_pushResult), "Update OK: v%u.%u.%u",
+                     r.fw_major, r.fw_minor, r.fw_patch);
+            _pushPhase = 2;
+          }
+          _dirty = true;
+        }
+      }
       // Update screen: the device rebooted back onto ESP-NOW – compare
       // versions and show the outcome before returning to the list.
       if (_screen == SCR_DEV_UPDATE && _updState == UPD_ACTIVE &&
@@ -578,6 +677,10 @@ void UiController::onPacket(const RxPacket &rx) {
           _dirty = true;
         }
       }
+      break;
+
+    case MSG_PUSH_ACK:
+      _pushTx.onControl(rx);
       break;
 
     case MSG_UPDATE_ACK:
@@ -657,13 +760,21 @@ void UiController::handleInput() {
             case 1: enterEdit(_editDev); break;
             case 2: gotoScreen(SCR_SOUND_TEST); break;
             case 3: gotoScreen(SCR_SELF_TEST); break;
-            case 4: gotoScreen(SCR_DEV_UPDATE); break;
+            case 4:
+              _bulk = false;
+              gotoScreen(SCR_PUSH);
+              break;
+            case 5: gotoScreen(SCR_DEV_UPDATE); break;
           }
         } else {
           switch (_cursor) {
             case 0: gotoScreen(SCR_DEVICE_LIST); break;
             case 1: enterEdit(_editDev); break;
-            case 2: gotoScreen(SCR_DEV_UPDATE); break;
+            case 2:
+              _bulk = false;
+              gotoScreen(SCR_PUSH);
+              break;
+            case 3: gotoScreen(SCR_DEV_UPDATE); break;
           }
         }
       }
@@ -686,6 +797,8 @@ void UiController::handleInput() {
           gotoScreen(SCR_MAIN);
         } else if (_cursor == 1) {
           startDiscovery(_listType);
+        } else if (_cursor == 2) {
+          gotoScreen(SCR_BULK);  // Alle aktualisieren (Doc 21 E4)
         } else {
           Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
           if (d) {
@@ -773,6 +886,18 @@ void UiController::handleInput() {
       // The device is in (or on its way into) its SoftAP mode and off the
       // air – back to the list; a later rescan shows it after its reboot.
       if (back || push) gotoScreen(SCR_DEVICE_LIST);
+      break;
+
+    case SCR_PUSH:
+    case SCR_BULK:
+      if (_pushPhase == 2) {
+        if (back || push) gotoScreen(SCR_DEVICE_LIST);
+      } else if (back) {
+        // abort: the device side times out on radio silence and keeps
+        // its old firmware (incomplete images cannot boot)
+        _pushFile.close();
+        gotoScreen(SCR_DEVICE_LIST);
+      }
       break;
 
     case SCR_TOOLS_MENU:
@@ -898,6 +1023,45 @@ void UiController::handleTimers() {
     _dirty = true;  // keep the client counter fresh
   }
 
+  // ESP-NOW push: drive the sender / wait for the device's reboot
+  if (_screen == SCR_PUSH || _screen == SCR_BULK) {
+    if (_pushPhase == 0) {
+      _pushTx.loop();
+      _dirty = true;  // live progress
+      if (_pushTx.state() == EspNowPushSender::DONE) {
+        _pushFile.close();
+        _pushPhase = 1;
+        _pushWaitMs = 0;
+        _pushDeadline = now + 25000;
+      } else if (_pushTx.state() == EspNowPushSender::FAILED) {
+        _pushFile.close();
+        if (_bulk) {
+          _bulkFail++;
+          bulkNext();
+        } else {
+          snprintf(_pushResult, sizeof(_pushResult), "Fehler (Code %u)",
+                   _pushTx.finalStatus());
+          _pushPhase = 2;
+        }
+      }
+    } else if (_pushPhase == 1) {
+      if (now - _pushWaitMs >= 3000) {
+        _pushWaitMs = now;
+        sendDiscoverReq(_editDev.deviceType);
+      }
+      if (now >= _pushDeadline) {
+        if (_bulk) {
+          _bulkFail++;
+          bulkNext();
+        } else {
+          snprintf(_pushResult, sizeof(_pushResult), "Keine Rueckmeldung");
+          _pushPhase = 2;
+        }
+        _dirty = true;
+      }
+    }
+  }
+
   // live monitor ages change the displayed seconds
   if (_screen == SCR_LIVE_MONITOR && _hitCount > 0) _dirty = true;
 }
@@ -1011,6 +1175,7 @@ void UiController::render() {
                  Ctx *x = (Ctx *)c;
                  if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
                  if (i == 1) { snprintf(b, n, "Neu suchen"); return; }
+                 if (i == 2) { snprintf(b, n, "Alle aktualisieren"); return; }
                  Device *d = x->ui->_reg.byIndex(x->type,
                                                  i - LIST_STATIC_ROWS);
                  if (!d) { b[0] = '\0'; return; }
@@ -1171,6 +1336,43 @@ void UiController::render() {
           _oled.drawStr(0, 42, _updResult);
           drawFooter("zurueck zur Liste...");
           break;
+      }
+      break;
+    }
+
+    case SCR_PUSH:
+    case SCR_BULK: {
+      char title[24];
+      char mac[7];
+      macSuffix(_editDev.mac, mac);
+      if (_screen == SCR_BULK)
+        snprintf(title, sizeof(title), "Alle aktualisieren");
+      else
+        snprintf(title, sizeof(title), "Funk-Update %s", mac);
+      drawTitle(title);
+
+      if (_pushPhase == 0) {
+        char line[24];
+        const size_t total = _pushTx.bytesTotal();
+        snprintf(line, sizeof(line), "Sende an %s...", mac);
+        _oled.drawStr(0, 28, line);
+        snprintf(line, sizeof(line), "%u%% (%u/%u KB)",
+                 total ? (unsigned)(_pushTx.bytesDone() * 100 / total) : 0,
+                 (unsigned)(_pushTx.bytesDone() / 1024),
+                 (unsigned)(total / 1024));
+        _oled.drawStr(0, 42, line);
+        drawFooter("K1 = Abbruch");
+      } else if (_pushPhase == 1) {
+        _oled.drawStr(0, 32, "Geflasht - warte auf");
+        _oled.drawStr(0, 44, "Neustart des Geraets");
+      } else {
+        _oled.drawStr(0, 36, _pushResult);
+        if (_screen == SCR_BULK) {
+          char line[24];
+          snprintf(line, sizeof(line), "Bericht siehe oben");
+          (void)line;
+        }
+        drawFooter("Push = Zurueck");
       }
       break;
     }
