@@ -1122,7 +1122,17 @@ void UiController::drawTitle(const char *title, int count) {
   _oled.setDrawColor(1);
 }
 
-void UiController::drawFooter(const char *text) { _oled.drawStr(0, 63, text); }
+void UiController::drawFooter(const char *text) {
+  // Inverted mini bar in a tiny font: reads as a footer, not as another
+  // menu row (rows end at baseline 54, descenders at 56 – the bar starts
+  // at 57 and stays clear of them).
+  _oled.drawBox(0, 57, 128, 7);
+  _oled.setDrawColor(0);
+  _oled.setFont(u8g2_font_4x6_tf);
+  _oled.drawStr(2, 63, text);
+  _oled.setDrawColor(1);
+  _oled.setFont(u8g2_font_6x10_tf);
+}
 
 // generic 4-line scrolling list body between y=24..54 (blue zone only)
 static void drawRows(U8G2 &oled, uint8_t cursor, int rowCount,
@@ -1136,6 +1146,18 @@ static void drawRows(U8G2 &oled, uint8_t cursor, int rowCount,
     const int y = 24 + line * 10;
     if (idx == cursor) oled.drawStr(0, y, ">");
     oled.drawStr(7, y, buf);
+  }
+
+  // Scrollbar on the right edge once the list does not fit: track over
+  // the body area, thumb position/size mirror cursor and list length.
+  if (rowCount > 4) {
+    const int trackY = 17, trackH = 38;
+    oled.drawVLine(127, trackY, trackH);
+    int thumbH = trackH * 4 / rowCount;
+    if (thumbH < 5) thumbH = 5;
+    const int thumbY =
+        trackY + (trackH - thumbH) * cursor / (rowCount - 1);
+    oled.drawBox(125, thumbY, 3, thumbH);
   }
 }
 
