@@ -1193,8 +1193,25 @@ void UiController::handleTimers() {
             case PUSH_ACK_BUSY:        why = "Geraet beschaeftigt"; break;
             default:                   why = "Fehler"; break;
           }
-          snprintf(_pushResult, sizeof(_pushResult), "%s (Code %u)", why,
-                   _pushTx.finalStatus());
+          // Update-library detail relayed by the device (targets have no
+          // display): e.g. "Flash #9 Activate"
+          static const char *UPD_NAMES[] = {
+              "",          "Write",  "Erase", "Read",  "Space",
+              "Size",      "Stream", "MD5",   "Magic", "Activate",
+              "Partition", "BadArg", "Abort"};
+          const uint8_t det = _pushTx.finalDetail();
+          if (det > 0 && det < sizeof(UPD_NAMES) / sizeof(UPD_NAMES[0])) {
+            // 21 sichtbare Zeichen: kompakt halten ("Flash #9 Activate")
+            const char *shortWhy =
+                _pushTx.finalStatus() == PUSH_ACK_FINAL_FLASH ? "Flash"
+                : _pushTx.finalStatus() == PUSH_ACK_FINAL_CRC ? "CRC"
+                                                              : why;
+            snprintf(_pushResult, sizeof(_pushResult), "%s #%u %s", shortWhy,
+                     det, UPD_NAMES[det]);
+          } else {
+            snprintf(_pushResult, sizeof(_pushResult), "%s (Code %u)", why,
+                     _pushTx.finalStatus());
+          }
           logf("[PUSH] %s\n", _pushResult);
           _pushPhase = 2;
           _dirty = true;  // phase change must repaint
