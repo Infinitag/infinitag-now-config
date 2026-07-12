@@ -118,6 +118,10 @@ static const char WEB_SEC_IMAGES[] = R"rawpage(
 
 static const char WEB_SEC_LOG[] = R"rawpage(
 <div class="sec">
+<h2>STATUS</h2>
+%STATUS%
+</div>
+<div class="sec">
 <h2>LOG</h2>
 <pre class="log" id="lg">%LOG%</pre>
 <div class="btnrow">

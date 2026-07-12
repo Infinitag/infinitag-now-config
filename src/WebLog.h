@@ -18,7 +18,11 @@ namespace weblog {
 // setup(), before anything logs.
 void begin();
 
+// Every line gets a "[  123] " seconds-since-boot prefix.
 void logf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
+// Human-readable reset reason of this boot ("Power-On", "PANIC", ...).
+const char *resetReasonText();
 
 // Append the buffered log, HTML-escaped, oldest line first.
 void appendHtml(String &out);

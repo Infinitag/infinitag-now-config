@@ -126,14 +126,18 @@ bool NetUpdater::fetchLatest(const char *repo, const char *assetPrefix,
     return false;
   }
 
-  // First browser_download_url whose file name starts with the prefix.
+  // browser_download_urls: the .bin asset plus its .crc32 sidecar.
   int pos = 0;
   String u;
   while (jsonFind(body, "browser_download_url", pos, u, &pos)) {
     const int slash = u.lastIndexOf('/');
-    if (slash >= 0 && u.substring(slash + 1).startsWith(assetPrefix)) {
+    if (slash < 0) continue;
+    const String name = u.substring(slash + 1);
+    if (!name.startsWith(assetPrefix)) continue;
+    if (name.endsWith(".crc32")) {
+      strncpy(out.crcUrl, u.c_str(), sizeof(out.crcUrl) - 1);
+    } else if (name.endsWith(".bin") && out.assetUrl[0] == '\0') {
       strncpy(out.assetUrl, u.c_str(), sizeof(out.assetUrl) - 1);
-      break;
     }
   }
   if (out.assetUrl[0] == '\0') {
@@ -145,7 +149,8 @@ bool NetUpdater::fetchLatest(const char *repo, const char *assetPrefix,
   out.major = (uint8_t)maj;
   out.minor = (uint8_t)min;
   out.patch = (uint8_t)pat;
-  logf("[NET] %s: v%u.%u.%u\n", repo, maj, min, pat);
+  logf("[NET] %s: v%u.%u.%u%s\n", repo, maj, min, pat,
+       out.crcUrl[0] ? " (+crc32)" : "");
   return true;
 }
 
@@ -179,7 +184,8 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
   const int len = http.getSize();  // -1 = unknown/chunked
   if (totalOut) *totalOut = len > 0 ? (size_t)len : 0;
   WiFiClient *stream = http.getStreamPtr();
-  uint8_t buf[1024];
+  // static: keeps 1 KB off the TLS-deep stack (single-threaded use)
+  static uint8_t buf[1024];
   size_t done = 0;
   uint32_t lastData = millis();
   while (http.connected() && (len < 0 || done < (size_t)len)) {
@@ -215,22 +221,70 @@ static bool streamDownload(const char *url, char *err, size_t errLen,
   return true;
 }
 
-bool NetUpdater::downloadToStore(const ReleaseInfo &rel, ImageStore &store,
-                                 ProgressFn progress) {
-  if (!store.uploadBegin()) {
-    setError(store.resultText());
+// Fetch the tiny "<CRC32-hex> <size>" sidecar of a release asset.
+bool NetUpdater::fetchCrcSidecar(ReleaseInfo &rel) {
+  if (rel.crcUrl[0] == '\0') return false;
+  WiFiClientSecure client;
+  client.setCACert(GITHUB_ROOT_CAS);
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  if (!http.begin(client, rel.crcUrl)) return false;
+  http.addHeader("User-Agent", "infinitag-config");
+  const int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    http.end();
     return false;
   }
-  size_t total = 0;
-  const bool ok = streamDownload(
-      rel.assetUrl, _err, sizeof(_err), progress, &total,
-      [&](const uint8_t *d, size_t n) { return store.uploadWrite(d, n); },
-      [&]() { store.uploadSync(); });
-  if (!store.uploadEnd(ok)) {
-    if (ok) setError(store.resultText());  // marker/FS problem
-    return false;
-  }
+  String body = http.getString();
+  http.end();
+  unsigned long crc = 0;
+  unsigned long size = 0;
+  if (sscanf(body.c_str(), "%lx %lu", &crc, &size) != 2) return false;
+  rel.expectCrc = (uint32_t)crc;
+  rel.expectSize = (size_t)size;
+  rel.hasCrc = true;
   return true;
+}
+
+bool NetUpdater::downloadToStore(ReleaseInfo &rel, ImageStore &store,
+                                 ProgressFn progress) {
+  fetchCrcSidecar(rel);  // old releases have none -> unverified download
+
+  // Up to two attempts: a corrupted download is deleted and refetched
+  // once before giving up - a corrupt image would otherwise only fail
+  // later on the device at activation time.
+  for (int attempt = 1; attempt <= 2; attempt++) {
+    if (!store.uploadBegin()) {
+      setError(store.resultText());
+      return false;
+    }
+    size_t total = 0;
+    const bool ok = streamDownload(
+        rel.assetUrl, _err, sizeof(_err), progress, &total,
+        [&](const uint8_t *d, size_t n) { return store.uploadWrite(d, n); },
+        [&]() { store.uploadSync(); });
+    if (!store.uploadEnd(ok)) {
+      if (ok) setError(store.resultText());  // marker/FS problem
+      return false;
+    }
+    if (!rel.hasCrc) {
+      logf("[NET] Kein .crc32-Sidecar - Download unverifiziert\n");
+      return true;
+    }
+    const ImageInfo &inf = store.info(store.lastType());
+    if (inf.size == rel.expectSize && inf.crc == rel.expectCrc) {
+      logf("[NET] Download verifiziert (CRC %08X, %u Bytes)\n", inf.crc,
+           (unsigned)inf.size);
+      return true;
+    }
+    logf("[NET] Download DEFEKT (Versuch %d): CRC %08X != %08X, "
+         "%u != %u Bytes\n",
+         attempt, inf.crc, rel.expectCrc, (unsigned)inf.size,
+         (unsigned)rel.expectSize);
+    store.remove(store.lastType());
+  }
+  setError("Download defekt (CRC)");
+  return false;
 }
 
 bool NetUpdater::selfUpdate(const ReleaseInfo &rel, ProgressFn progress) {

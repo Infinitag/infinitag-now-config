@@ -16,6 +16,7 @@ struct ImageInfo {
   uint8_t deviceType = 0;  // inow::DeviceType
   uint8_t major = 0, minor = 0, patch = 0;
   size_t size = 0;
+  uint32_t crc = 0;  // CRC32 over the whole file (computed while storing)
 };
 
 class ImageStore {
@@ -38,6 +39,8 @@ class ImageStore {
                             // transport teardown (it closes foreign fds)
   bool uploadEnd(bool ok);  // verify marker, move into the type's slot
   const char *resultText() const { return _result; }
+  // device type of the most recently accepted upload (for verification)
+  uint8_t lastType() const { return _lastType; }
 
  private:
   // Scan a stored file for the marker (used at begin() for existing files).
@@ -50,6 +53,11 @@ class ImageStore {
   int _fd = -1;         // raw VFS fd of the upload temp file
   bool _uploadActive = false;
   size_t _rxBytes = 0;  // bytes accepted by uploadWrite (authoritative size)
+  uint32_t _upCrc = 0;  // running CRC32 of the current upload
+  uint8_t _lastType = 0;  // type of the last accepted upload
+  // scan work buffer - deliberately a member (BSS), NOT on the stack:
+  // the download path already carries deep mbedTLS frames
+  uint8_t _scanBuf[16 + 1460];
   char _result[64] = "";
 
   // rolling marker scan across chunk boundaries

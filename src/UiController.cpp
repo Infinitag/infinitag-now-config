@@ -360,10 +360,11 @@ void UiController::buildWebPages() {
     for (uint8_t t : {(uint8_t)DEV_STATION, (uint8_t)DEV_TARGET}) {
       const ImageInfo &inf = _images.info(t);
       if (!inf.present) continue;
-      char line[64];
-      snprintf(line, sizeof(line), "%s v%u.%u.%u &middot; %u Bytes",
+      char line[96];
+      snprintf(line, sizeof(line),
+               "%s v%u.%u.%u &middot; %u Bytes &middot; CRC %08X",
                t == DEV_STATION ? "Station" : "Target", inf.major, inf.minor,
-               inf.patch, (unsigned)inf.size);
+               inf.patch, (unsigned)inf.size, inf.crc);
       status = line;
     }
     if (status.isEmpty()) status = "&ndash; kein Image &ndash;";
@@ -401,10 +402,32 @@ void UiController::buildWebPages() {
     _webUpd.server().send(303, "text/plain", "");
   });
   srv.on("/log", HTTP_GET, [this]() {
+    String st;
+    st.reserve(500);
+    char b[112];
+    snprintf(b, sizeof(b),
+             "<p>Version: <b>v%u.%u.%u</b> &middot; Uptime: <b>%lu min</b> "
+             "&middot; Reset: <b>%s</b></p>",
+             cfg::FW_MAJOR, cfg::FW_MINOR, cfg::FW_PATCH,
+             (unsigned long)(millis() / 60000UL), weblog::resetReasonText());
+    st += b;
+    snprintf(b, sizeof(b), "<p>Heap frei: <b>%u KB</b> (min. %u KB)</p>",
+             (unsigned)(ESP.getFreeHeap() / 1024),
+             (unsigned)(ESP.getMinFreeHeap() / 1024));
+    st += b;
+    const float vbat = readVbat();
+    if (vbat > 3.0f) {
+      snprintf(b, sizeof(b), "<p>Batterie: <b>%.2f V</b></p>", (double)vbat);
+    } else {
+      snprintf(b, sizeof(b), "<p>Versorgung: <b>USB</b></p>");
+    }
+    st += b;
+
     String content;
     weblog::appendHtml(content);
     if (content.isEmpty()) content = "(Log ist leer)";
     String sec = WEB_SEC_LOG;
+    sec.replace("%STATUS%", st);
     sec.replace("%LOG%", content);
     _webUpd.server().send(200, "text/html", webPage("/log", sec));
   });
@@ -474,29 +497,22 @@ bool UiController::beginPush(const Device &d) {
   _pushFile = LittleFS.open(ImageStore::path(d.deviceType), "r");
   if (!_pushFile) return false;
 
-  // CRC once over the file (bitwise, ~0.5 s per MB on the C3)
-  uint32_t crc = 0;
-  size_t crcBytes = 0;
-  uint8_t buf[1024];
-  while (_pushFile.available()) {
-    const int n = _pushFile.read(buf, sizeof(buf));
-    if (n <= 0) break;
-    crc = crc32(crc, buf, (size_t)n);
-    crcBytes += (size_t)n;
-  }
+  // CRC comes from the store: computed while the image was stored,
+  // verified against the release sidecar and re-checked at every boot
+  // scan - no second full read of the file here.
+  const uint32_t crc = img.crc;
 
   _pushImgKey = _images.versionKey(d.deviceType);
   _pushPhase = 0;
   _pushResult[0] = '\0';
-  // announce exactly what the CRC covered, not the store metadata
-  if (!_pushTx.start(&_net, d.mac, pushRead, &_pushFile, crcBytes, crc,
+  if (!_pushTx.start(&_net, d.mac, pushRead, &_pushFile, img.size, crc,
                      img.major, img.minor, img.patch)) {
     _pushFile.close();
     return false;
   }
   logf("[PUSH] -> %02X%02X%02X: v%u.%u.%u, %u Bytes, CRC %08X\n", d.mac[3],
        d.mac[4], d.mac[5], img.major, img.minor, img.patch,
-       (unsigned)crcBytes, (unsigned)crc);
+       (unsigned)img.size, (unsigned)crc);
   return true;
 }
 
@@ -546,8 +562,9 @@ void UiController::netScreen(const char *l1, const char *l2, const char *l3,
 static UiController *s_netUi = nullptr;
 static char s_netLine[24];
 static void netProgress(size_t done, size_t total) {
+  // seldom: every sendBuffer() blocks the bus ~100 ms while TLS reads run
   static uint32_t lastMs = 0;
-  if (millis() - lastMs < 250) return;
+  if (millis() - lastMs < 1500) return;
   lastMs = millis();
   char line[24];
   if (total > 0) {
@@ -1145,23 +1162,42 @@ void UiController::handleTimers() {
   if (_screen == SCR_PUSH || _screen == SCR_BULK) {
     if (_pushPhase == 0) {
       _pushTx.loop();
-      _dirty = true;  // live progress
+      // redraw only when the percentage changes - rendering blocks the
+      // I2C bus and with it the loop that feeds the sender
+      static unsigned lastPct = 255;
+      const size_t total = _pushTx.bytesTotal();
+      const unsigned pct =
+          total ? (unsigned)(_pushTx.bytesDone() * 100 / total) : 0;
+      if (pct != lastPct) {
+        lastPct = pct;
+        _dirty = true;
+      }
       if (_pushTx.state() == EspNowPushSender::DONE) {
         logf("[PUSH] Uebertragung komplett, warte auf Reboot\n");
         _pushFile.close();
         _pushPhase = 1;
         _pushWaitMs = 0;
         _pushDeadline = now + 25000;
+        _dirty = true;  // phase change must repaint (progress throttle!)
       } else if (_pushTx.state() == EspNowPushSender::FAILED) {
-        logf("[PUSH] Fehler (Code %u)\n", _pushTx.finalStatus());
         _pushFile.close();
         if (_bulk) {
+          logf("[PUSH] Fehler (Code %u)\n", _pushTx.finalStatus());
           _bulkFail++;
           bulkNext();
         } else {
-          snprintf(_pushResult, sizeof(_pushResult), "Fehler (Code %u)",
+          const char *why;
+          switch (_pushTx.finalStatus()) {
+            case PUSH_ACK_FINAL_CRC:   why = "CRC-Fehler"; break;
+            case PUSH_ACK_FINAL_FLASH: why = "Flash-Fehler"; break;
+            case PUSH_ACK_BUSY:        why = "Geraet beschaeftigt"; break;
+            default:                   why = "Fehler"; break;
+          }
+          snprintf(_pushResult, sizeof(_pushResult), "%s (Code %u)", why,
                    _pushTx.finalStatus());
+          logf("[PUSH] %s\n", _pushResult);
           _pushPhase = 2;
+          _dirty = true;  // phase change must repaint
         }
       }
     } else if (_pushPhase == 1) {
