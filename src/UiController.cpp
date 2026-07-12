@@ -3,6 +3,7 @@
 #include <esp_system.h>  // esp_random()
 
 #include "Config.h"
+#include "SoundCatalog.h"
 
 using namespace inow;
 
@@ -159,7 +160,7 @@ void UiController::enterEdit(Device &d) {
 
     add("Station", current, 0,
         _staPickCount > 0 ? _staPickCount - 1 : 0, 1, nullptr, FMT_STATION);
-    add("Sound", c.sound_id, 0, cfg::SOUND_ID_MAX, 1);
+    add("Sound", c.sound_id, 0, SOUND_COUNT - 1, 1, nullptr, FMT_SOUND);
     add("Hit-Time", c.hit_time_ms, 100, 60000, 100, "ms");
     add("Cooldown", c.cooldown_ms, 0, 60000, 100, "ms");
     add("SW-Anim", c.sw_animation, 0, 1, 1);
@@ -521,7 +522,7 @@ void UiController::handleInput() {
       if (_valueEditing) {
         if (delta)
           _testSound = (uint8_t)clampVal(_testSound + delta * stepMul, 0,
-                                         cfg::SOUND_ID_MAX);
+                                         SOUND_COUNT - 1);
         if (push) _valueEditing = false;  // apply
         if (back) _valueEditing = false;
       } else {
@@ -841,6 +842,10 @@ void UiController::render() {
                        macSuffix(ui->_staPick[f.value], val);
                      }
                      break;
+                   case FMT_SOUND:
+                     snprintf(val, sizeof(val), "%02ld %s", (long)f.value,
+                              soundName((uint8_t)f.value));
+                     break;
                    default:
                      snprintf(val, sizeof(val), "%ld%s", (long)f.value,
                               f.unit ? f.unit : "");
@@ -871,8 +876,9 @@ void UiController::render() {
                  if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
                  if (i == 1) {
                    const bool e = ui->_valueEditing;
-                   snprintf(b, n, "Sound:   %s%02u%s", e ? "[" : " ",
-                            ui->_testSound, e ? "]" : "");
+                   snprintf(b, n, "Sound:%s%02u %s%s", e ? "[" : " ",
+                            ui->_testSound, soundName(ui->_testSound),
+                            e ? "]" : "");
                    return;
                  }
                  snprintf(b, n, "[Abspielen]");

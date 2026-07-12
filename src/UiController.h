@@ -59,6 +59,7 @@ class UiController {
     FMT_BITS,     // sw_channels: "12-" style
     FMT_LED,      // LED channel mask: letters "R".."RGBW"
     FMT_STATION,  // index into _staPick, shown as MAC suffix
+    FMT_SOUND,    // sound id shown as "06 Daemon" (SoundCatalog)
   };
   struct Field {
     const char *label;
