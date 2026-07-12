@@ -112,4 +112,6 @@ Interrupt – **kein PCNT auf dem C3!** – plus 5 Tasten entprellt),
   kommentiert in der `platformio.ini`.
 - Wissensbasis-Änderungen immer auf dem NAS-Master machen und in
   `infinitag-now/docs/` mitsyncen.
-- Lizenz: CC BY-NC-SA 4.0 – Tobias Stewen.
+- Lizenz: PolyForm Noncommercial 1.0.0 – Tobias Stewen. Kommerzielle
+  Nutzung nur mit Genehmigung (info@hallow-tech.de). Doku-Repo
+  (infinitag-now): CC BY-NC-SA 4.0.
