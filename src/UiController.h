@@ -19,6 +19,7 @@
 
 #include "DeviceRegistry.h"
 #include "EspNowService.h"
+#include "ImageStore.h"
 #include "InputController.h"
 #include "VersionMemo.h"
 #include "WebUpdateService.h"
@@ -47,6 +48,7 @@ class UiController {
     SCR_TOOLS_MENU,    // Firmware-Info / own update mode
     SCR_TOOLS_INFO,
     SCR_SELF_UPDATE,   // own SoftAP web updater (ends in reboot)
+    SCR_IMAGES,        // stored device firmware images (Doc 21 E1)
   };
 
   // Static rows before the devices in a device list:
@@ -177,6 +179,9 @@ class UiController {
 
   // highest firmware version ever seen per device type (NVS)
   VersionMemo _memo;
+
+  // stored device firmware images (LittleFS, Doc 21 E1)
+  ImageStore _images;
   char _toolsMsg[24] = "";      // short-lived footer note in the tools menu
   uint32_t _toolsMsgUntil = 0;
 

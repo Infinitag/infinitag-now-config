@@ -1,0 +1,12 @@
+# Infinitag Config-Box – Partitionstabelle 4 MB (Doc 21 Etappe 1).
+# OTA-Slots gegenueber default.csv verkleinert (2x 1088 KB statt 2x 1280 KB),
+# dafuer ~1,85 MB LittleFS fuer Geraete-Firmware-Images (Station + Target
+# gleichzeitig). ACHTUNG: Partitionswechsel geht NICHT per OTA – einmalig
+# per USB flashen (pio run -t upload loescht dabei auch das alte NVS nicht:
+# Offset/Groesse von nvs sind unveraendert).
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x110000,
+app1,     app,  ota_1,   0x120000, 0x110000,
+spiffs,   data, spiffs,  0x230000, 0x1D0000,

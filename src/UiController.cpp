@@ -25,8 +25,9 @@ static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
 static constexpr uint8_t DEVMENU_TARGET_COUNT = 3;
 
 static const char *TOOLS_ITEMS[] = {"< Zurueck", "Firmware-Info",
-                                    "Update-Modus", "Versions-Memo Reset"};
-static constexpr uint8_t TOOLS_COUNT = 4;
+                                    "Update-Modus", "Geraete-Images",
+                                    "Versions-Memo Reset"};
+static constexpr uint8_t TOOLS_COUNT = 5;
 
 // Self-test rows: 0 = back, 1 = run all, 2..6 = tests 1..5 (DebugTest ids).
 static const char *SELFTEST_ITEMS[] = {"< Zurueck",  "Alle testen",
@@ -47,6 +48,13 @@ UiController::UiController(EspNowService &net, DeviceRegistry &reg,
 
 void UiController::begin() {
   _memo.load();
+  if (_images.begin()) {
+    // stored image versions count as "seen" (stage 2 of the '^' marker)
+    for (uint8_t t : {(uint8_t)DEV_STATION, (uint8_t)DEV_TARGET}) {
+      const uint32_t k = _images.versionKey(t);
+      if (k) _memo.note(t, k);
+    }
+  }
   _oled.begin();
   _oled.setFont(u8g2_font_6x10_tf);
   gotoScreen(SCR_MAIN);
@@ -266,6 +274,17 @@ float UiController::readVbat() const {
   return (mvAcc / 8) * cfg::VBAT_DIVIDER / 1000.0f;
 }
 
+// StoreHooks bridge (WebUpdateService callbacks are plain C functions).
+static ImageStore *s_imgStore = nullptr;
+static bool storeBegin(const char *) { return s_imgStore->uploadBegin(); }
+static bool storeWrite(const uint8_t *d, size_t n) {
+  return s_imgStore->uploadWrite(d, n);
+}
+static bool storeEnd(bool ok) { return s_imgStore->uploadEnd(ok); }
+static const char *storeResult() { return s_imgStore->resultText(); }
+static const StoreHooks kStoreHooks = {storeBegin, storeWrite, storeEnd,
+                                       storeResult};
+
 void UiController::beginSelfUpdate() {
   // Battery gate: never start flashing on a nearly empty pack. Readings
   // below 3.0 V mean "no battery / USB powered" and are fine.
@@ -285,6 +304,8 @@ void UiController::beginSelfUpdate() {
   snprintf(label, sizeof(label), "Config-Box %02X%02X%02X", m[3], m[4], m[5]);
 
   // Tears down ESP-NOW; the only way back to normal operation is a reboot.
+  s_imgStore = &_images;
+  _webUpd.setStoreHooks(&kStoreHooks);
   if (_webUpd.begin(_selfUpdAp, ver, label, "infinitag-config")) {
     _selfUpd = SELFUPD_ACTIVE;
     _selfUpdDeadline = millis() + cfg::SELF_UPDATE_TIMEOUT_MS;
@@ -587,7 +608,8 @@ void UiController::handleInput() {
           case 0: gotoScreen(SCR_MAIN); break;
           case 1: gotoScreen(SCR_TOOLS_INFO); break;
           case 2: gotoScreen(SCR_SELF_UPDATE); break;
-          case 3:
+          case 3: gotoScreen(SCR_IMAGES); break;
+          case 4:
             // forget the best-ever-seen versions (e.g. after a
             // deliberate downgrade left a stale '^' marker)
             _memo.clear();
@@ -598,6 +620,21 @@ void UiController::handleInput() {
       }
       if (back) gotoScreen(SCR_MAIN);
       break;
+
+    case SCR_IMAGES: {
+      // rows: 0 = back, 1 = station image, 2 = target image
+      if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, 2);
+      if (push) {
+        if (_cursor == 0) {
+          gotoScreen(SCR_TOOLS_MENU);
+        } else {
+          const uint8_t t = _cursor == 1 ? DEV_STATION : DEV_TARGET;
+          if (_images.remove(t)) _dirty = true;  // push on entry = delete
+        }
+      }
+      if (back) gotoScreen(SCR_TOOLS_MENU);
+      break;
+    }
 
     case SCR_SELF_UPDATE:
       if (_selfUpd == SELFUPD_REFUSED) {
@@ -997,6 +1034,30 @@ void UiController::render() {
         _oled.drawStr(0, 48, buf);
         drawFooter("K1 = Abbruch (Reboot)");
       }
+      break;
+    }
+
+    case SCR_IMAGES: {
+      drawTitle("Geraete-Images");
+      struct Ctx { UiController *ui; } ctx{this};
+      drawRows(_oled, _cursor, 3,
+               [](void *c, int i, char *b, size_t n) {
+                 UiController *ui = ((Ctx *)c)->ui;
+                 if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
+                 const uint8_t t = i == 1 ? DEV_STATION : DEV_TARGET;
+                 const ImageInfo &inf = ui->_images.info(t);
+                 if (inf.present) {
+                   snprintf(b, n, "%-8s v%u.%u.%u %ukB",
+                            t == DEV_STATION ? "Station:" : "Target:",
+                            inf.major, inf.minor, inf.patch,
+                            (unsigned)(inf.size / 1024));
+                 } else {
+                   snprintf(b, n, "%-8s --",
+                            t == DEV_STATION ? "Station:" : "Target:");
+                 }
+               },
+               &ctx);
+      drawFooter("Push = loeschen");
       break;
     }
 

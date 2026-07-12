@@ -10,9 +10,14 @@
 
 #include "Config.h"
 #include "DeviceRegistry.h"
+#include "FwMarker.h"
 #include "EspNowService.h"
 #include "InputController.h"
 #include "UiController.h"
+
+// Firmware identity for the image store / ESP-NOW push (Doc 21 E1).
+INOW_FW_MARKER(inow::DEV_CONFIG_BOX, cfg::FW_MAJOR, cfg::FW_MINOR,
+               cfg::FW_PATCH)
 
 static EspNowService gNet;
 static DeviceRegistry gRegistry;
