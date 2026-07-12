@@ -1,6 +1,7 @@
 #include "WebLog.h"
 
 #include <esp_attr.h>
+#include <esp_system.h>
 #include <stdarg.h>
 
 namespace {
@@ -43,13 +44,30 @@ void clear() {
 
 size_t size() { return s_hdr.used; }
 
+const char *resetReasonText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "Power-On";
+    case ESP_RST_SW: return "Software-Reboot";
+    case ESP_RST_PANIC: return "PANIC (Absturz!)";
+    case ESP_RST_INT_WDT: return "INT-Watchdog";
+    case ESP_RST_TASK_WDT: return "Task-Watchdog";
+    case ESP_RST_WDT: return "Watchdog";
+    case ESP_RST_BROWNOUT: return "BROWNOUT (Spannung!)";
+    case ESP_RST_DEEPSLEEP: return "Deepsleep";
+    default: return "unbekannt";
+  }
+}
+
 void logf(const char *fmt, ...) {
   char line[192];
+  const int p = snprintf(line, sizeof(line), "[%6lu] ",
+                         (unsigned long)(millis() / 1000));
   va_list args;
   va_start(args, fmt);
-  const int n = vsnprintf(line, sizeof(line), fmt, args);
+  int n = vsnprintf(line + p, sizeof(line) - p, fmt, args);
   va_end(args);
   if (n <= 0) return;
+  n += p;
   Serial.print(line);
   const size_t len =
       (size_t)n < sizeof(line) - 1 ? (size_t)n : sizeof(line) - 1;

@@ -16,6 +16,10 @@ struct ReleaseInfo {
   bool ok = false;
   uint8_t major = 0, minor = 0, patch = 0;
   char assetUrl[224] = "";
+  char crcUrl[224] = "";   // .crc32 sidecar (empty for old releases)
+  bool hasCrc = false;
+  uint32_t expectCrc = 0;  // filled from the sidecar on download
+  size_t expectSize = 0;
 };
 
 class NetUpdater {
@@ -34,9 +38,11 @@ class NetUpdater {
   // Progress callback: bytes done / total (total 0 = unknown).
   using ProgressFn = void (*)(size_t done, size_t total);
 
-  // Stream a device image into the store (marker check included there).
-  bool downloadToStore(const ReleaseInfo &rel, ImageStore &store,
+  // Stream a device image into the store; verified against the release's
+  // .crc32 sidecar (one automatic retry on corruption).
+  bool downloadToStore(ReleaseInfo &rel, ImageStore &store,
                        ProgressFn progress);
+  bool fetchCrcSidecar(ReleaseInfo &rel);
 
   // Stream the box's own new firmware into the OTA slot. true = flashed
   // and boot partition switched; caller shows "OK" and reboots.

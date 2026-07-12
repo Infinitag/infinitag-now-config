@@ -90,7 +90,7 @@ void ImageStore::feedScan(const uint8_t *data, size_t len) {
   if (_markerFound) return;
   // Work on carry + chunk so markers spanning chunk borders are found.
   // INOW_FW_MARKER_LEN is 13; carry keeps the last 12 bytes.
-  uint8_t buf[16 + 1460];
+  uint8_t *buf = _scanBuf;
   while (len > 0) {
     const size_t take = len > 1460 ? 1460 : len;
     memcpy(buf, _carry, _carryLen);
@@ -118,15 +118,18 @@ bool ImageStore::scanFile(const char *p, ImageInfo &out) {
   File f = LittleFS.open(p, "r");
   if (!f) return false;
   resetScan();
+  uint32_t crc = 0;
   uint8_t buf[1024];
-  while (f.available() && !_markerFound) {
+  while (f.available()) {  // full read: marker AND file crc
     const int n = f.read(buf, sizeof(buf));
     if (n <= 0) break;
     feedScan(buf, (size_t)n);
+    crc = inow::crc32(crc, buf, (size_t)n);
   }
   const size_t size = f.size();
   f.close();
   if (!_markerFound) return false;
+  out.crc = crc;
   out.present = true;
   out.deviceType = _markerType;
   out.major = _markerMaj;
@@ -176,6 +179,7 @@ bool ImageStore::uploadBegin() {
        (unsigned)(LittleFS.usedBytes() / 1024),
        (unsigned)(LittleFS.totalBytes() / 1024));
   _rxBytes = 0;
+  _upCrc = 0;
   resetScan();
   return true;
 }
@@ -183,6 +187,7 @@ bool ImageStore::uploadBegin() {
 bool ImageStore::uploadWrite(const uint8_t *data, size_t len) {
   if (_fd < 0) return false;
   feedScan(data, len);
+  _upCrc = inow::crc32(_upCrc, data, len);
   size_t done = 0;
   while (done < len) {
     const ssize_t n = ::write(_fd, data + done, len - done);
@@ -254,6 +259,8 @@ bool ImageStore::uploadEnd(bool ok) {
   s->minor = _markerMin;
   s->patch = _markerPat;
   s->size = size;
+  s->crc = _upCrc;
+  _lastType = _markerType;
   snprintf(_result, sizeof(_result), "%s v%u.%u.%u (%u KB) gespeichert",
            _markerType == inow::DEV_STATION ? "Station" : "Target",
            _markerMaj, _markerMin, _markerPat, (unsigned)(size / 1024));

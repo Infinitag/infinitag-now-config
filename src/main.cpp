@@ -28,8 +28,8 @@ static UiController gUi(gNet, gRegistry, gInput);
 void setup() {
   Serial.begin(115200);  // USB-CDC, no waiting: box must boot without host
   weblog::begin();       // before anything logs; survives soft reboots
-  logf("=== Boot v%u.%u.%u (Reset %d) ===\n", cfg::FW_MAJOR, cfg::FW_MINOR,
-       cfg::FW_PATCH, (int)esp_reset_reason());
+  logf("=== Boot v%u.%u.%u (%s) ===\n", cfg::FW_MAJOR, cfg::FW_MINOR,
+       cfg::FW_PATCH, weblog::resetReasonText());
 
   gInput.begin();
 
