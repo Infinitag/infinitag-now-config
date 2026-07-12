@@ -43,6 +43,7 @@ class ImageStore {
 
   ImageInfo _station, _target;
   File _tmp;
+  size_t _rxBytes = 0;  // bytes accepted by uploadWrite (authoritative size)
   char _result[64] = "";
 
   // rolling marker scan across chunk boundaries

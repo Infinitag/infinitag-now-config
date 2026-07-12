@@ -142,6 +142,7 @@ bool ImageStore::uploadBegin() {
     snprintf(_result, sizeof(_result), "Speicher voll oder FS-Fehler");
     return false;
   }
+  _rxBytes = 0;
   resetScan();
   return true;
 }
@@ -149,12 +150,17 @@ bool ImageStore::uploadBegin() {
 bool ImageStore::uploadWrite(const uint8_t *data, size_t len) {
   if (!_tmp) return false;
   feedScan(data, len);
-  return _tmp.write(data, len) == len;
+  if (_tmp.write(data, len) != len) return false;
+  _rxBytes += len;
+  return true;
 }
 
 bool ImageStore::uploadEnd(bool ok) {
   if (!_tmp) return false;
-  const size_t size = _tmp.size();
+  // File::size() on the open write handle returns the last committed
+  // metadata size - the unsynced tail (up to one 4 KB block) is missing.
+  // Close first, then trust the byte count from uploadWrite and verify
+  // it against the on-disk file.
   _tmp.close();
 
   if (!ok || !_markerFound) {
@@ -169,6 +175,18 @@ bool ImageStore::uploadEnd(bool ok) {
              _markerType);
     return false;
   }
+
+  const size_t size = _rxBytes;
+  File chk = LittleFS.open(TMP_PATH, "r");
+  const size_t onDisk = chk ? chk.size() : 0;
+  chk.close();
+  if (onDisk != size) {
+    LittleFS.remove(TMP_PATH);
+    snprintf(_result, sizeof(_result), "FS-Fehler: %u statt %u Bytes",
+             (unsigned)onDisk, (unsigned)size);
+    return false;
+  }
+
   LittleFS.remove(dst);
   if (!LittleFS.rename(TMP_PATH, dst)) {
     LittleFS.remove(TMP_PATH);
