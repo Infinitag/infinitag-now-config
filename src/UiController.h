@@ -116,6 +116,7 @@ class UiController {
   void sendTestSound();
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
   void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
+  void buildWifiForm();            // (re)build the WLAN form incl. saved SSID
   bool beginPush(const Device &d); // start the ESP-NOW push (image needed)
   void bulkNext();                 // advance the "Alle aktualisieren" queue
   void beginSelfUpdate();          // battery check + own SoftAP updater

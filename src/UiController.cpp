@@ -306,6 +306,23 @@ static const char *storeResult() { return s_imgStore->resultText(); }
 static const StoreHooks kStoreHooks = {storeBegin, storeWrite, storeEnd,
                                        storeResult};
 
+// (Re)build the WLAN form for the SoftAP page; called at update-mode
+// start AND after every save so the page never shows a stale SSID.
+void UiController::buildWifiForm() {
+  char curSsid[33] = "";
+  NetUpdater::getWifiSsid(curSsid, sizeof(curSsid));
+  _wifiFormHtml =
+      "<hr><h3>WLAN f&uuml;r Internet-Updates</h3>"
+      "<p>Aktuell: <b>";
+  _wifiFormHtml += curSsid[0] ? curSsid : "nicht konfiguriert";
+  _wifiFormHtml +=
+      "</b></p><form method='POST' action='/wifi'>"
+      "<p><input name='ssid' placeholder='SSID' required></p>"
+      "<p><input name='pass' type='password' placeholder='Passwort'></p>"
+      "<p><input type='submit' value='WLAN speichern'></p></form>";
+  _webUpd.setExtraHtml(_wifiFormHtml.c_str());
+}
+
 void UiController::beginSelfUpdate() {
   // Battery gate: never start flashing on a nearly empty pack. Readings
   // below 3.0 V mean "no battery / USB powered" and are fine.
@@ -327,25 +344,17 @@ void UiController::beginSelfUpdate() {
   // Tears down ESP-NOW; the only way back to normal operation is a reboot.
   s_imgStore = &_images;
   _webUpd.setStoreHooks(&kStoreHooks);
-  char curSsid[33] = "";
-  NetUpdater::getWifiSsid(curSsid, sizeof(curSsid));
-  _wifiFormHtml =
-      "<hr><h3>WLAN f&uuml;r Internet-Updates</h3>"
-      "<p>Aktuell: <b>";
-  _wifiFormHtml += curSsid[0] ? curSsid : "nicht konfiguriert";
-  _wifiFormHtml +=
-      "</b></p><form method='POST' action='/wifi'>"
-      "<p><input name='ssid' placeholder='SSID' required></p>"
-      "<p><input name='pass' type='password' placeholder='Passwort'></p>"
-      "<p><input type='submit' value='WLAN speichern'></p></form>";
-  _webUpd.setExtraHtml(_wifiFormHtml.c_str());
+  buildWifiForm();
   if (_webUpd.begin(_selfUpdAp, ver, label, "infinitag-config")) {
     _webUpd.server().on("/wifi", HTTP_POST, [this]() {
       WebServer &srv = _webUpd.server();
       NetUpdater::setWifiCredentials(srv.arg("ssid").c_str(),
                                      srv.arg("pass").c_str());
-      srv.send(200, "text/html",
-               "<h2>WLAN gespeichert.</h2><p><a href='/'>Zur&uuml;ck</a></p>");
+      buildWifiForm();  // root page must show the new SSID right away
+      String html = "<h2>WLAN gespeichert: <b>";
+      html += srv.arg("ssid");
+      html += "</b></h2><p><a href='/'>Zur&uuml;ck</a></p>";
+      srv.send(200, "text/html", html);
     });
     _selfUpd = SELFUPD_ACTIVE;
     _selfUpdDeadline = millis() + cfg::SELF_UPDATE_TIMEOUT_MS;
