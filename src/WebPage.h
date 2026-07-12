@@ -32,10 +32,10 @@ a:hover{color:#79C8B4}
 .wm i{font-style:normal;color:#939598}
 .wm em{font-style:normal;color:#4db3a2}
 .sub{font-size:11px;color:#8a9092;letter-spacing:1px;margin-top:2px}
-.nv{display:flex;gap:4px;padding:10px 20px;border-bottom:1px solid #23282a;flex-wrap:wrap}
-.nv a{padding:6px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:1px;color:#8a9092}
-.nv a:hover{color:#e8eaea}
-.nv a.on{background:#0d8c80;color:#fff}
+.nav{display:flex;border-bottom:1px solid #23282a;padding:0 16px;flex-wrap:wrap}
+.nav a{padding:10px 14px;font-size:13px;color:#8a9092}
+.nav a:hover{color:#e8eaea}
+.nav a.on{color:#fff;font-weight:700;border-bottom:2px solid #03817D;margin-bottom:-1px}
 .bd{padding:6px 28px 28px}
 .sec{border-top:2px solid #333c3f;margin-top:28px;padding-top:22px}
 .sec:first-child{border:0;margin-top:0;padding-top:16px}
@@ -61,14 +61,14 @@ button:hover,a.btn:hover{background:#0d8c80;color:#fff}
 <div class="wrap">
 <div class="card">
 <div class="bar"></div>
-<div class="hdr">
+<div class="hdr" style="border:0">
 <svg width="46" height="24" viewBox="0 0 64 32" fill="none"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#79C8B4"/><stop offset="1" stop-color="#03817D"/></linearGradient></defs><polygon points="32,16 25,3.9 11,3.9 4,16 11,28.1 25,28.1" stroke="url(#g)" stroke-width="4"/><polygon points="60,16 53,3.9 39,3.9 32,16 39,28.1 53,28.1" stroke="url(#g)" stroke-width="4"/></svg>
 <div>
 <div class="wm"><i>INFINI</i><b>TAG</b> <em>NOW</em></div>
 <div class="sub">CONFIG-BOX &middot; %DEVICE_ID%</div>
 </div>
 </div>
-<div class="nv">%NAV%</div>
+<div class="nav">%NAV%</div>
 <div class="bd">
 )rawpage";
 
@@ -122,11 +122,24 @@ static const char WEB_SEC_LOG[] = R"rawpage(
 <pre class="log" id="lg">%LOG%</pre>
 <div class="btnrow">
 <a class="btn" href="/log">Aktualisieren</a>
+<a class="btn" href="#" id="cpy">Kopieren</a>
 <form method="POST" action="/log/clear"><button type="submit">Leeren</button></form>
 </div>
 <div class="hint">Ringpuffer (6&nbsp;KB, &auml;lteste Zeilen fallen raus). &Uuml;berlebt Neustarts per Software &mdash; nicht das Ausschalten.</div>
 </div>
-<script>var l=document.getElementById('lg');l.scrollTop=l.scrollHeight;</script>
+<script>
+var l=document.getElementById('lg');l.scrollTop=l.scrollHeight;
+document.getElementById('cpy').addEventListener('click',function(e){
+e.preventDefault();var b=this;
+var t=document.createElement('textarea');
+t.value=l.textContent;
+document.body.appendChild(t);
+t.select();t.setSelectionRange(0,t.value.length);
+try{document.execCommand('copy');b.textContent='Kopiert!';}catch(err){b.textContent='Fehler';}
+document.body.removeChild(t);
+setTimeout(function(){b.textContent='Kopieren';},1500);
+});
+</script>
 )rawpage";
 
 static const char WEB_PAGE_BOTTOM[] = R"rawpage(

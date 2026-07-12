@@ -311,10 +311,10 @@ static const StoreHooks kStoreHooks = {storeBegin, storeWrite, storeEnd,
 // Assemble one SoftAP page: shared top (header + menu) + one section +
 // bottom. activePath marks the current menu entry.
 String UiController::webPage(const char *activePath, const String &section) {
-  static const char *NAV[][2] = {{"/", "UPDATE"},
+  static const char *NAV[][2] = {{"/", "Update"},
                                  {"/wlan", "WLAN"},
-                                 {"/images", "GER&Auml;TE-IMAGES"},
-                                 {"/log", "LOG"}};
+                                 {"/images", "Ger&auml;te-Images"},
+                                 {"/log", "Log"}};
   char mac[7];
   macSuffix(_net.ownMac(), mac);
 
