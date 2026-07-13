@@ -44,6 +44,11 @@ class NetUpdater {
                        ProgressFn progress);
   bool fetchCrcSidecar(ReleaseInfo &rel);
 
+  // One-shot resume flag (NVS): set before the self-update reboot so the
+  // NEW firmware automatically continues the interrupted update run.
+  static void setResumeFlag();
+  static bool consumeResumeFlag();  // true exactly once, clears the flag
+
   // Stream the box's own new firmware into the OTA slot. true = flashed
   // and boot partition switched; caller shows "OK" and reboots.
   bool selfUpdate(const ReleaseInfo &rel, ProgressFn progress);
