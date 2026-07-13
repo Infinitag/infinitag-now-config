@@ -48,6 +48,7 @@ constexpr uint32_t RENDER_INTERVAL_MS      = 50;    // ~20 fps OLED
 constexpr uint8_t  UPDATE_TIMEOUT_MIN     = 5;      // device SoftAP window
 constexpr uint32_t UPDATE_ACK_TIMEOUT_MS  = 1500;   // UPDATE_BEGIN -> UPDATE_ACK
 constexpr uint32_t SELF_UPDATE_TIMEOUT_MS = 10UL * 60UL * 1000UL;  // own AP window
+constexpr uint8_t CAL_MINUTES = 10;  // Kalibriermodus: Auto-Aus der Station
 // Below this pack voltage no update is started (box must not die mid-flash).
 // Readings < 3.0 V mean "running from USB" (divider floats) -> always OK.
 constexpr float VBAT_MIN_FOR_UPDATE = 3.6f;

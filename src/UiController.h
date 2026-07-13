@@ -49,6 +49,7 @@ class UiController {
     SCR_DEVICE_EDIT,
     SCR_SOUND_TEST,    // pick sound + fire CFG_TEST_SOUND at chosen station
     SCR_SELF_TEST,     // remote self-test (DEBUG_CMD/DEBUG_RESULT)
+    SCR_CALIBRATE,     // calibration mode on the station (laser + IR on)
     SCR_DEV_UPDATE,    // sent UPDATE_BEGIN, show the device's AP info
     SCR_PUSH,          // ESP-NOW firmware push to _editDev (Doc 21 E3)
     SCR_BULK,          // push to every outdated device of the list type
@@ -115,6 +116,7 @@ class UiController {
   void sendCfgWrite();
   void sendTestSound();
   void runSelfTest(uint8_t test);  // sends DEBUG_CMD, arms deadline
+  void sendCalibrate(uint8_t minutes);  // DEBUG_CMD Test 6 (0 = aus)
   void beginDeviceUpdate();        // sends UPDATE_BEGIN to _editDev
   String webPage(const char *activePath, const String &section);
   void buildWebPages();            // root page + /wlan, /images, /log routes
@@ -174,6 +176,8 @@ class UiController {
 
   // self-test state (tests 1..5, results indexed test-1)
   static constexpr uint8_t SELF_TESTS = 5;
+  uint8_t _calState = 0;        // 0 = warte auf ACK, 1 = laeuft, 2 = keine Antwort
+  uint32_t _calDeadline = 0;    // ACK-Timeout
   char _selfResult[SELF_TESTS] = {' ', ' ', ' ', ' ', ' '};
   uint8_t _selfRunning = 0;     // DebugTest id currently awaited, 0 = none
   bool _selfAllMode = false;    // "Alle testen": auto-advance on result

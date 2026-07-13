@@ -24,8 +24,9 @@ static constexpr uint8_t MAIN_COUNT = 4;
 // Device menu (after picking a device from the list)
 static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
                                         "Sound testen", "Selbsttest",
-                                        "Update (Funk)", "Update (OTA)"};
-static constexpr uint8_t DEVMENU_STATION_COUNT = 6;
+                                        "Kalibrierung", "Update (Funk)",
+                                        "Update (OTA)"};
+static constexpr uint8_t DEVMENU_STATION_COUNT = 7;
 static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
                                        "Update (Funk)", "Update (OTA)"};
 static constexpr uint8_t DEVMENU_TARGET_COUNT = 4;
@@ -243,6 +244,18 @@ void UiController::sendTestSound() {
   init(p, MSG_CFG_TEST_SOUND, DEV_STATION);
   p.payload[0] = _testSound;
   _net.send(_editDev.mac, p);
+}
+
+// Kalibriermodus der Station (DEBUG_CMD Test 6): minutes > 0 = an mit
+// Auto-Aus, 0 = sofort beenden. Antwort kommt als DEBUG_RESULT.
+void UiController::sendCalibrate(uint8_t minutes) {
+  Packet p;
+  init(p, MSG_DEBUG_CMD, _editDev.deviceType);
+  p.payload[0] = DBG_CALIBRATE;
+  p.payload[1] = minutes;
+  _calState = 0;
+  _calDeadline = millis() + 3000;
+  if (!_net.send(_editDev.mac, p)) _calState = 2;
 }
 
 void UiController::runSelfTest(uint8_t test) {
@@ -789,6 +802,12 @@ void UiController::onPacket(const RxPacket &rx) {
       break;
 
     case MSG_DEBUG_RESULT:
+      if (_screen == SCR_CALIBRATE && memcmp(rx.mac, _editDev.mac, 6) == 0 &&
+          p.payload[0] == DBG_CALIBRATE) {
+        _calState = (p.payload[1] == DBG_RES_OK) ? 1 : 2;
+        _dirty = true;
+        break;
+      }
       if (_screen == SCR_SELF_TEST && memcmp(rx.mac, _editDev.mac, 6) == 0) {
         const uint8_t test = p.payload[0];
         if (test >= 1 && test <= SELF_TESTS) {
@@ -896,10 +915,14 @@ void UiController::handleInput() {
             case 2: gotoScreen(SCR_SOUND_TEST); break;
             case 3: gotoScreen(SCR_SELF_TEST); break;
             case 4:
+              sendCalibrate(cfg::CAL_MINUTES);  // AN beim Betreten
+              gotoScreen(SCR_CALIBRATE);
+              break;
+            case 5:
               _bulk = false;
               gotoScreen(SCR_PUSH);
               break;
-            case 5: gotoScreen(SCR_DEV_UPDATE); break;
+            case 6: gotoScreen(SCR_DEV_UPDATE); break;
           }
         } else {
           switch (_cursor) {
@@ -1016,6 +1039,15 @@ void UiController::handleInput() {
       }
       break;
     }
+
+    case SCR_CALIBRATE:
+      // Betreten hat AN gesendet; jede Beenden-Geste schaltet aus und
+      // geht zurueck ins Geraete-Menue.
+      if (back || push) {
+        sendCalibrate(0);
+        gotoScreen(SCR_DEVICE_MENU);
+      }
+      break;
 
     case SCR_DEV_UPDATE:
       // The device is in (or on its way into) its SoftAP mode and off the
@@ -1135,6 +1167,12 @@ void UiController::handleTimers() {
     if (_updState == UPD_DEVICE_BACK && now - _updBackMs >= 4000) {
       gotoScreen(SCR_DEVICE_LIST);
     }
+  }
+
+  // calibration screen: no DEBUG_RESULT within the deadline
+  if (_screen == SCR_CALIBRATE && _calState == 0 && now >= _calDeadline) {
+    _calState = 2;
+    _dirty = true;
   }
 
   // self-test: no DEBUG_RESULT within the deadline
@@ -1505,6 +1543,25 @@ void UiController::render() {
                },
                &ctx);
       drawFooter(_selfRunning ? "Test laeuft..." : "Push = starten");
+      break;
+    }
+
+    case SCR_CALIBRATE: {
+      char title[24];
+      char mac[7];
+      macSuffix(_editDev.mac, mac);
+      snprintf(title, sizeof(title), "Kalibrierung %s", mac);
+      drawTitle(title);
+      const char *st;
+      switch (_calState) {
+        case 1:  st = "Laser + IR-LED AN"; break;
+        case 2:  st = "Keine Antwort!"; break;
+        default: st = "Starte..."; break;
+      }
+      _oled.drawStr(0, 26, st);
+      _oled.drawStr(0, 38, "IR-LED gegen weisse LED");
+      _oled.drawStr(0, 48, "tauschen, Optik zentrieren");
+      drawFooter("Push/K1 = beenden");
       break;
     }
 
