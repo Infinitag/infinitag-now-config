@@ -160,6 +160,19 @@ void UiController::enterEdit(Device &d) {
     // Wand status colors: channel mask R/G/B/W, all 15 combinations.
     add("LED bereit", c.led_ready, 1, LED_MASK_MAX, 1, nullptr, FMT_LED);
     add("LED aktiv", c.led_busy, 1, LED_MASK_MAX, 1, nullptr, FMT_LED);
+    // Shot laser: one combined value - 0 = Aus, 1 = Dauerhaft an,
+    // 2..21 = Nachleuchten (v-1) x 0,5 s (PROTOCOL.md laser_mode/glow).
+    int32_t laserVal;
+    if (c.laser_mode == LASER_MODE_OFF) {
+      laserVal = 0;
+    } else if (c.laser_mode == LASER_MODE_ON) {
+      laserVal = 1;
+    } else {
+      int32_t g = c.laser_glow == 0 ? 1 : c.laser_glow;
+      if (g > LASER_GLOW_MAX) g = LASER_GLOW_MAX;
+      laserVal = 1 + g;
+    }
+    add("Laser", laserVal, 0, 1 + LASER_GLOW_MAX, 1, nullptr, FMT_LASER);
   } else {
     TargetConfig c;
     decodeTargetConfig(d.info.config_blob, d.info.config_blob_len, c);
@@ -216,6 +229,17 @@ void UiController::sendCfgWrite() {
     c.volume_pct = (uint8_t)_fields[0].value;
     c.led_ready = (uint8_t)_fields[1].value;
     c.led_busy = (uint8_t)_fields[2].value;
+    const int32_t lv = _fields[3].value;
+    if (lv == 0) {
+      c.laser_mode = LASER_MODE_OFF;
+      c.laser_glow = 1;
+    } else if (lv == 1) {
+      c.laser_mode = LASER_MODE_ON;
+      c.laser_glow = 1;
+    } else {
+      c.laser_mode = LASER_MODE_GLOW;
+      c.laser_glow = (uint8_t)(lv - 1);
+    }
     encodeStationConfig(c, p.payload);
   } else {
     TargetConfig c;
@@ -1464,6 +1488,18 @@ void UiController::render() {
                               (f.value & 1) ? '1' : '-',
                               (f.value & 2) ? '2' : '-',
                               (f.value & 4) ? '3' : '-');
+                     break;
+                   case FMT_LASER:
+                     if (f.value == 0) {
+                       snprintf(val, sizeof(val), "Aus");
+                     } else if (f.value == 1) {
+                       snprintf(val, sizeof(val), "An");
+                     } else {
+                       // Nachleuchten in 0,5-s-Schritten
+                       snprintf(val, sizeof(val), "%ld,%lds",
+                                (long)((f.value - 1) / 2),
+                                (long)(((f.value - 1) % 2) * 5));
+                     }
                      break;
                    case FMT_STATION:
                      if (ui->_staPickCount == 0) {

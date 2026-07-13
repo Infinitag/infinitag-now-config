@@ -72,6 +72,7 @@ class UiController {
     FMT_LED,      // LED channel mask: letters "R".."RGBW"
     FMT_STATION,  // index into _staPick, shown as MAC suffix
     FMT_SOUND,    // sound id shown as "06 Daemon" (SoundCatalog)
+    FMT_LASER,    // 0 = Aus, 1 = An, 2.. = Nachleuchten (v-1) x 0,5 s
   };
   struct Field {
     const char *label;
