@@ -65,6 +65,14 @@ void UiController::begin() {
   _oled.begin();
   _oled.setFont(u8g2_font_6x10_tf);
   gotoScreen(SCR_MAIN);
+
+  // Selbst-Update hat ein Resume-Flag hinterlassen: den unterbrochenen
+  // Internet-Update-Lauf mit der NEUEN Firmware fortsetzen (Flag ist
+  // bereits geloescht - ein Absturz fuehrt nicht in eine Schleife).
+  if (NetUpdater::consumeResumeFlag()) {
+    logf("[NET] Setze Internet-Update nach Selbst-Update fort\n");
+    runNetUpdate(true);  // blockiert und endet im Reboot
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -623,7 +631,7 @@ bool uiWaitConfirm(InputController &in) {
   }
 }
 
-void UiController::runNetUpdate() {
+void UiController::runNetUpdate(bool resumed) {
   // battery gate as with the SoftAP update mode
   const float vbat = readVbat();
   if (vbat > 3.0f && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
@@ -690,10 +698,41 @@ void UiController::runNetUpdate() {
     uiWaitConfirm(_in);
     ESP.restart();
   }
-  netScreen(l1, l2, l3, "Push=Laden  K1=Abbruch");
-  if (!uiWaitConfirm(_in)) ESP.restart();
+  if (resumed) {
+    // Fortsetzung nach dem Selbst-Update-Reboot: der Helfer hat den Lauf
+    // schon bestaetigt - kurz zeigen, was jetzt passiert, nicht fragen.
+    netScreen(l1, l2, l3, "Setze Update fort...");
+    delay(1500);
+  } else {
+    netScreen(l1, l2, l3, "Push=Laden  K1=Abbruch");
+    if (!uiWaitConfirm(_in)) ESP.restart();
+  }
 
-  // 1) device images into the store (survive the self-update reboot)
+  // 1) own firmware FIRST: its fixes (z. B. an der Download-Pipeline)
+  // sollen aktiv sein, BEVOR die Geraete-Images geladen werden. Der Lauf
+  // setzt sich nach dem Reboot automatisch fort (Einmal-Flag im NVS,
+  // geloescht direkt beim Wiedereinstieg - kein Schleifen-Risiko).
+  if (boxNew) {
+    if (staNew || tgtNew) NetUpdater::setResumeFlag();
+    snprintf(s_netLine, sizeof(s_netLine), "Box-Update laeuft");
+    netScreen(s_netLine, "NICHT ausschalten!");
+    logf("[NET] Box-Selbst-Update auf v%u.%u.%u\n", relBox.major,
+         relBox.minor, relBox.patch);
+    if (net.selfUpdate(relBox, netProgress)) {
+      netScreen("Box-Update OK",
+                (staNew || tgtNew) ? "Neustart, setze fort..."
+                                   : "Neustart...");
+    } else {
+      NetUpdater::consumeResumeFlag();  // kein Resume mit alter Firmware
+      netScreen("Box-Update Fehler", net.lastError(), "Alte FW bleibt.",
+                "Taste = Neustart");
+      uiWaitConfirm(_in);
+    }
+    delay(800);
+    ESP.restart();
+  }
+
+  // 2) device images into the store
   if (staNew) {
     snprintf(s_netLine, sizeof(s_netLine), "Lade Station-Image");
     netScreen(s_netLine);
@@ -719,24 +758,9 @@ void UiController::runNetUpdate() {
     }
   }
 
-  // 2) own firmware last – reboot follows immediately
-  if (boxNew) {
-    snprintf(s_netLine, sizeof(s_netLine), "Box-Update laeuft");
-    netScreen(s_netLine, "NICHT ausschalten!");
-    logf("[NET] Box-Selbst-Update auf v%u.%u.%u\n", relBox.major,
-         relBox.minor, relBox.patch);
-    if (net.selfUpdate(relBox, netProgress)) {
-      netScreen("Box-Update OK", "Neustart...");
-    } else {
-      netScreen("Box-Update Fehler", net.lastError(), "Alte FW bleibt.",
-                "Taste = Neustart");
-      uiWaitConfirm(_in);
-    }
-  } else {
-    netScreen("Images geladen.", "Verteilen: Geraet >", "Update (OTA)",
-              "Taste = Neustart");
-    uiWaitConfirm(_in);
-  }
+  netScreen("Images geladen.", "Verteilen: Geraet >", "Update (OTA)",
+            "Taste = Neustart");
+  uiWaitConfirm(_in);
   delay(800);
   ESP.restart();
 }

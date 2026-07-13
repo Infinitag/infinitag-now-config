@@ -127,7 +127,7 @@ class UiController {
   // Blocking guided flow "Nach Updates suchen" (Doc 21 E2): WLAN ->
   // GitHub -> device images into the store -> self update. Always ends
   // in ESP.restart().
-  void runNetUpdate();
+  void runNetUpdate(bool resumed = false);
   // Draws a final "reboot" frame (the OLED keeps showing the last frame
   // across ESP.restart(), so without this the user cannot tell that the
   // reboot happened), then restarts. Never returns.

@@ -43,6 +43,22 @@ void NetUpdater::getWifiSsid(char *out, size_t n) {
 // helpers
 // ---------------------------------------------------------------------------
 
+void NetUpdater::setResumeFlag() {
+  Preferences prefs;
+  prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
+  prefs.putUChar("resume", 1);
+  prefs.end();
+}
+
+bool NetUpdater::consumeResumeFlag() {
+  Preferences prefs;
+  prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
+  const bool set = prefs.getUChar("resume", 0) != 0;
+  if (set) prefs.remove("resume");
+  prefs.end();
+  return set;
+}
+
 void NetUpdater::setError(const char *msg) {
   strncpy(_err, msg, sizeof(_err) - 1);
   logf("[NET] Fehler: %s\n", _err);
