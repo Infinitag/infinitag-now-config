@@ -184,6 +184,8 @@ void UiController::enterEdit(Device &d) {
     // Shooter id in the IR telegram: hits are routed back by it. 0 is a
     // valid value (factory group), see PROTOCOL.md v0x03.
     add("IR-ID", c.ir_id, 0, IR_ID_MAX, 1);
+    add("LED-Hell.", c.led_bright_pct == 0 ? 100 : c.led_bright_pct, 1, 100,
+        1, "%");
   } else {
     TargetConfig c;
     decodeTargetConfig(d.info.config_blob, d.info.config_blob_len, c);
@@ -194,6 +196,8 @@ void UiController::enterEdit(Device &d) {
     add("Cooldown", c.cooldown_ms, 0, 60000, 100, "ms");
     add("SW-Anim", c.sw_animation, 0, 1, 1);
     add("SW-Kanal", c.sw_channels, 0, 7, 1, nullptr, FMT_BITS);
+    add("LED-Hell.", c.led_bright_pct == 0 ? 100 : c.led_bright_pct, 1, 100,
+        1, "%");
   }
   gotoScreen(SCR_DEVICE_EDIT);
 }
@@ -224,6 +228,7 @@ void UiController::sendCfgWrite() {
       c.laser_glow = (uint8_t)(lv - 1);
     }
     c.ir_id = (uint8_t)_fields[4].value;
+    c.led_bright_pct = (uint8_t)_fields[5].value;
     encodeStationConfig(c, p.payload);
   } else {
     TargetConfig c;
@@ -232,6 +237,7 @@ void UiController::sendCfgWrite() {
     c.cooldown_ms = (uint16_t)_fields[2].value;
     c.sw_animation = (uint8_t)_fields[3].value;
     c.sw_channels = (uint8_t)_fields[4].value;
+    c.led_bright_pct = (uint8_t)_fields[5].value;
     encodeTargetConfig(c, p.payload);
   }
 
