@@ -11,8 +11,12 @@ struct Device {
   bool used = false;
   uint8_t mac[6] = {0};
   uint8_t deviceType = 0;  // inow::DeviceType
+  uint8_t proto = 0;       // protocol version of the reply; foreign versions
+                           //   arrive via the rescue anchor (PROTOCOL.md)
   inow::DiscoverReply info;
   uint32_t lastSeenMs = 0;
+
+  bool foreignProto() const { return proto != inow::PROTOCOL_VERSION; }
 };
 
 class DeviceRegistry {

@@ -548,6 +548,10 @@ void UiController::bulkNext() {
       _dirty = true;
       return;
     }
+    if (d->foreignProto()) {
+      _bulkSkip++;  // radio push is version-locked -> "Update (OTA)" only
+      continue;
+    }
     if (DeviceRegistry::versionKey(d->info) >= imgKey) {
       _bulkSkip++;
       continue;  // already up to date
@@ -930,6 +934,14 @@ void UiController::handleInput() {
                                : DEVMENU_TARGET_COUNT;
       if (delta) _cursor = (uint8_t)clampVal(_cursor + delta, 0, rows - 1);
       if (push) {
+        // Foreign protocol version (rescue anchor, PROTOCOL.md): only
+        // "< Zurueck" and "Update (OTA)" work - config blobs are not
+        // interpretable and the radio push is version-locked.
+        const uint8_t updOta =
+            _editDev.deviceType == DEV_STATION ? 6 : 3;
+        if (_editDev.foreignProto() && _cursor != 0 && _cursor != updOta) {
+          break;
+        }
         if (_editDev.deviceType == DEV_STATION) {
           switch (_cursor) {
             case 0: gotoScreen(SCR_DEVICE_LIST); break;  // < Zurueck
@@ -1415,6 +1427,8 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
+      if (_editDev.foreignProto())
+        drawFooter("Fremdversion: nur OTA!");
       break;
     }
 
