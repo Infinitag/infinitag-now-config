@@ -31,7 +31,7 @@ static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
                                        "Update (Funk)", "Update (OTA)"};
 static constexpr uint8_t DEVMENU_TARGET_COUNT = 4;
 
-static const char *TOOLS_ITEMS[] = {"< Zurueck", "Nach Updates suchen",
+static const char *TOOLS_ITEMS[] = {"< Zurueck", "Box-Update suchen",
                                     "Firmware-Info", "Update-Modus",
                                     "Geraete-Images", "Versions-Memo Reset"};
 static constexpr uint8_t TOOLS_COUNT = 6;
@@ -66,12 +66,12 @@ void UiController::begin() {
   _oled.setFont(u8g2_font_6x10_tf);
   gotoScreen(SCR_MAIN);
 
-  // Selbst-Update hat ein Resume-Flag hinterlassen: den unterbrochenen
-  // Internet-Update-Lauf mit der NEUEN Firmware fortsetzen (Flag ist
-  // bereits geloescht - ein Absturz fuehrt nicht in eine Schleife).
+  // Alt-Firmware kann ein Resume-Flag hinterlassen haben (frueher lud
+  // der Lauf nach dem Selbst-Update noch Geraete-Images nach). Images
+  // laedt jetzt der "Update suchen"-Eintrag der Geraetelisten - das
+  // Flag wird nur noch verbraucht.
   if (NetUpdater::consumeResumeFlag()) {
-    logf("[NET] Setze Internet-Update nach Selbst-Update fort\n");
-    runNetUpdate(true);  // blockiert und endet im Reboot
+    logf("[NET] Altes Resume-Flag verbraucht (Images: Geraetelisten)\n");
   }
 }
 
@@ -609,7 +609,7 @@ bool uiWaitConfirm(InputController &in) {
   }
 }
 
-void UiController::runNetUpdate(bool resumed) {
+void UiController::runNetUpdate(uint8_t what) {
   // battery gate as with the SoftAP update mode
   const float vbat = readVbat();
   if (vbat > 3.0f && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
@@ -619,14 +619,32 @@ void UiController::runNetUpdate(bool resumed) {
     ESP.restart();
   }
   if (!NetUpdater::hasWifiCredentials()) {
-    netScreen("Kein WLAN konfiguriert", "Tools > Update-Modus:", 
+    netScreen("Kein WLAN konfiguriert", "Tools > Update-Modus:",
               "WLAN dort speichern", "Taste = Neustart");
     uiWaitConfirm(_in);
     ESP.restart();
   }
 
+  // Ein Lauf = EIN Repo: Tools sucht nur das Box-Update, die Geraete-
+  // listen laden jeweils ihr eigenes Image ("Update suchen") - der Store
+  // haelt ohnehin nur ein Image, so gibt es nichts zu ueberschreiben.
+  const char *repo, *prefix, *label;
+  if (what == DEV_STATION) {
+    repo = "infinitag-now-station";
+    prefix = "infinitag-station";
+    label = "Station";
+  } else if (what == DEV_TARGET) {
+    repo = "infinitag-now-target";
+    prefix = "infinitag-target";
+    label = "Target";
+  } else {
+    repo = "infinitag-now-config";
+    prefix = "infinitag-config";
+    label = "Box";
+  }
+
   s_netUi = this;
-  logf("[NET] Internet-Update gestartet\n");
+  logf("[NET] Internet-Update gestartet (%s)\n", label);
   esp_now_deinit();  // leave the ESP-NOW world; way back = reboot
 
   NetUpdater net;
@@ -639,124 +657,64 @@ void UiController::runNetUpdate(bool resumed) {
   }
 
   netScreen("Frage GitHub ab...");
-  ReleaseInfo relBox, relSta, relTgt;
-  net.fetchLatest("infinitag-now-config", "infinitag-config", relBox);
-  net.fetchLatest("infinitag-now-station", "infinitag-station", relSta);
-  net.fetchLatest("infinitag-now-target", "infinitag-target", relTgt);
-
-  const uint32_t ownKey = ((uint32_t)cfg::FW_MAJOR << 16) |
-                          ((uint32_t)cfg::FW_MINOR << 8) | cfg::FW_PATCH;
-  const bool boxNew = relBox.ok && NetUpdater::versionKey(relBox) > ownKey;
-  const bool staNew =
-      relSta.ok &&
-      NetUpdater::versionKey(relSta) > _images.versionKey(DEV_STATION);
-  const bool tgtNew =
-      relTgt.ok &&
-      NetUpdater::versionKey(relTgt) > _images.versionKey(DEV_TARGET);
-
-  char l1[24], l2[24], l3[24];
-  if (relBox.ok)
-    snprintf(l1, sizeof(l1), "Box:     v%u.%u.%u%s", relBox.major,
-             relBox.minor, relBox.patch, boxNew ? " NEU" : " ok");
-  else
-    snprintf(l1, sizeof(l1), "Box:     Fehler");
-  if (relSta.ok)
-    snprintf(l2, sizeof(l2), "Station: v%u.%u.%u%s", relSta.major,
-             relSta.minor, relSta.patch, staNew ? " NEU" : " ok");
-  else
-    snprintf(l2, sizeof(l2), "Station: --");
-  if (relTgt.ok)
-    snprintf(l3, sizeof(l3), "Target:  v%u.%u.%u%s", relTgt.major,
-             relTgt.minor, relTgt.patch, tgtNew ? " NEU" : " ok");
-  else
-    snprintf(l3, sizeof(l3), "Target:  --");
-
-  if (!boxNew && !staNew && !tgtNew) {
-    netScreen(l1, l2, l3, "Alles aktuell! Taste=Neustart");
+  ReleaseInfo rel;
+  net.fetchLatest(repo, prefix, rel);
+  if (!rel.ok) {
+    netScreen("GitHub-Fehler", net.lastError(), nullptr,
+              "Taste = Neustart");
     uiWaitConfirm(_in);
     ESP.restart();
   }
-  if (resumed) {
-    // Fortsetzung nach dem Selbst-Update-Reboot: der Helfer hat den Lauf
-    // schon bestaetigt - kurz zeigen, was jetzt passiert, nicht fragen.
-    netScreen(l1, l2, l3, "Setze Update fort...");
-    delay(1500);
-  } else {
-    netScreen(l1, l2, l3, "Push=Laden  K1=Abbruch");
-    if (!uiWaitConfirm(_in)) ESP.restart();
-  }
 
-  // 1) own firmware FIRST: its fixes (z. B. an der Download-Pipeline)
-  // sollen aktiv sein, BEVOR die Geraete-Images geladen werden. Der Lauf
-  // setzt sich nach dem Reboot automatisch fort (Einmal-Flag im NVS,
-  // geloescht direkt beim Wiedereinstieg - kein Schleifen-Risiko).
-  if (boxNew) {
-    if (staNew || tgtNew) NetUpdater::setResumeFlag();
-    snprintf(s_netLine, sizeof(s_netLine), "Box-Update laeuft");
-    netScreen(s_netLine, "NICHT ausschalten!");
-    logf("[NET] Box-Selbst-Update auf v%u.%u.%u\n", relBox.major,
-         relBox.minor, relBox.patch);
-    if (net.selfUpdate(relBox, netProgress)) {
-      netScreen("Box-Update OK",
-                (staNew || tgtNew) ? "Neustart, setze fort..."
-                                   : "Neustart...");
-    } else {
-      NetUpdater::consumeResumeFlag();  // kein Resume mit alter Firmware
-      netScreen("Box-Update Fehler", net.lastError(), "Alte FW bleibt.",
-                "Taste = Neustart");
+  // Vergleich: Box gegen die eigene Firmware, Images gegen den Store
+  // (leerer Slot = 0 -> gilt immer als NEU).
+  const uint32_t haveKey =
+      (what == DEV_STATION || what == DEV_TARGET)
+          ? _images.versionKey(what)
+          : ((uint32_t)cfg::FW_MAJOR << 16) |
+                ((uint32_t)cfg::FW_MINOR << 8) | cfg::FW_PATCH;
+  const bool isNew = NetUpdater::versionKey(rel) > haveKey;
+
+  char l1[24];
+  snprintf(l1, sizeof(l1), "%s: v%u.%u.%u%s", label, rel.major, rel.minor,
+           rel.patch, isNew ? " NEU" : " ok");
+  if (!isNew) {
+    netScreen(l1, nullptr, nullptr, "Aktuell! Taste=Neustart");
+    uiWaitConfirm(_in);
+    ESP.restart();
+  }
+  netScreen(l1, nullptr, nullptr, "Push=Laden  K1=Abbruch");
+  if (!uiWaitConfirm(_in)) ESP.restart();
+
+  if (what == DEV_STATION || what == DEV_TARGET) {
+    snprintf(s_netLine, sizeof(s_netLine), "Lade %s-Image", label);
+    netScreen(s_netLine);
+    logf("[NET] Lade %s-Image v%u.%u.%u\n", label, rel.major, rel.minor,
+         rel.patch);
+    if (!net.downloadToStore(rel, _images, netProgress)) {
+      snprintf(s_netLine, sizeof(s_netLine), "%s-Image Fehler", label);
+      netScreen(s_netLine, net.lastError(), nullptr, "Taste = Neustart");
       uiWaitConfirm(_in);
+      ESP.restart();
     }
+    netScreen("Image geladen.", "Verteilen: Geraet >", "Update (Funk/OTA)",
+              "Taste = Neustart");
+    uiWaitConfirm(_in);
     delay(800);
     ESP.restart();
   }
 
-  // 2) device images into the store
-  // Das Fach haelt nur EIN Image (1,5-MB-FS, uploadBegin() raeumt vor
-  // jedem Download alles weg) - zwei Downloads nacheinander wuerden
-  // sich ueberschreiben und das erste Image stillschweigend verlieren.
-  // Sind BEIDE neu, waehlt der Nutzer eines; fuers zweite den Lauf nach
-  // dem Verteilen einfach wiederholen (der Vergleich laeuft gegen den
-  // Store, nicht die Geraete - das fehlende Image gilt wieder als NEU).
-  bool loadSta = staNew, loadTgt = tgtNew;
-  if (staNew && tgtNew) {
-    netScreen("Nur 1 Image-Fach:", "Push = Station laden",
-              "K4 = Target laden", "K1 = Abbruch");
-    for (;;) {
-      _in.poll();
-      if (_in.takePress(BTN_ENC)) { loadTgt = false; break; }
-      if (_in.takePress(BTN_K4)) { loadSta = false; break; }
-      if (_in.takePress(BTN_K1)) ESP.restart();
-      delay(10);
-    }
+  // Box-Selbst-Update (Tools-Menue)
+  netScreen("Box-Update laeuft", "NICHT ausschalten!");
+  logf("[NET] Box-Selbst-Update auf v%u.%u.%u\n", rel.major, rel.minor,
+       rel.patch);
+  if (net.selfUpdate(rel, netProgress)) {
+    netScreen("Box-Update OK", "Neustart...");
+  } else {
+    netScreen("Box-Update Fehler", net.lastError(), "Alte FW bleibt.",
+              "Taste = Neustart");
+    uiWaitConfirm(_in);
   }
-  if (loadSta) {
-    snprintf(s_netLine, sizeof(s_netLine), "Lade Station-Image");
-    netScreen(s_netLine);
-    logf("[NET] Lade Station-Image v%u.%u.%u\n", relSta.major, relSta.minor,
-         relSta.patch);
-    if (!net.downloadToStore(relSta, _images, netProgress)) {
-      netScreen("Station-Image Fehler", net.lastError(), nullptr,
-                "Taste = Neustart");
-      uiWaitConfirm(_in);
-      ESP.restart();
-    }
-  }
-  if (loadTgt) {
-    snprintf(s_netLine, sizeof(s_netLine), "Lade Target-Image");
-    netScreen(s_netLine);
-    logf("[NET] Lade Target-Image v%u.%u.%u\n", relTgt.major, relTgt.minor,
-         relTgt.patch);
-    if (!net.downloadToStore(relTgt, _images, netProgress)) {
-      netScreen("Target-Image Fehler", net.lastError(), nullptr,
-                "Taste = Neustart");
-      uiWaitConfirm(_in);
-      ESP.restart();
-    }
-  }
-
-  netScreen("Image geladen.", "Verteilen: Geraet >", "Update (Funk/OTA)",
-            (staNew && tgtNew) ? "2. Image: Lauf wdh." : "Taste = Neustart");
-  uiWaitConfirm(_in);
   delay(800);
   ESP.restart();
 }
@@ -1008,6 +966,8 @@ void UiController::handleInput() {
         } else if (_cursor == 1) {
           startDiscovery(_listType);
         } else if (_cursor == 2) {
+          runNetUpdate(_listType);  // Image des Typs laden (Reboot)
+        } else if (_cursor == 3) {
           gotoScreen(SCR_BULK);  // Alle aktualisieren (Doc 21 E4)
         } else {
           Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
@@ -1125,7 +1085,7 @@ void UiController::handleInput() {
       if (push) {
         switch (_cursor) {
           case 0: gotoScreen(SCR_MAIN); break;
-          case 1: runNetUpdate(); break;  // blocking, ends in restart
+          case 1: runNetUpdate(DEV_CONFIG_BOX); break;  // blockiert, Reboot
           case 2: gotoScreen(SCR_TOOLS_INFO); break;
           case 3: gotoScreen(SCR_SELF_UPDATE); break;
           case 4: gotoScreen(SCR_IMAGES); break;
@@ -1463,7 +1423,8 @@ void UiController::render() {
                  Ctx *x = (Ctx *)c;
                  if (i == 0) { snprintf(b, n, "< Zurueck"); return; }
                  if (i == 1) { snprintf(b, n, "Neu suchen"); return; }
-                 if (i == 2) { snprintf(b, n, "Alle aktualisieren"); return; }
+                 if (i == 2) { snprintf(b, n, "Update suchen"); return; }
+                 if (i == 3) { snprintf(b, n, "Alle aktualisieren"); return; }
                  Device *d = x->ui->_reg.byIndex(x->type,
                                                  i - LIST_STATIC_ROWS);
                  if (!d) { b[0] = '\0'; return; }

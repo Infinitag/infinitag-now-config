@@ -61,8 +61,9 @@ class UiController {
   };
 
   // Static rows before the devices in a device list:
-  // 0 = "< Zurueck", 1 = "Neu suchen", 2 = "Alle aktualisieren"
-  static constexpr uint8_t LIST_STATIC_ROWS = 3;
+  // 0 = "< Zurueck", 1 = "Neu suchen", 2 = "Update suchen" (Image des
+  // Typs von GitHub in den Store laden), 3 = "Alle aktualisieren"
+  static constexpr uint8_t LIST_STATIC_ROWS = 4;
 
   // --- editing ---------------------------------------------------------------
   static constexpr size_t MAX_FIELDS = 8;
@@ -123,7 +124,11 @@ class UiController {
   // Blocking guided flow "Nach Updates suchen" (Doc 21 E2): WLAN ->
   // GitHub -> device images into the store -> self update. Always ends
   // in ESP.restart().
-  void runNetUpdate(bool resumed = false);
+  // Internet-Update fuer EIN Ziel: DEV_CONFIG_BOX = Self-Update (Tools),
+  // DEV_STATION/DEV_TARGET = Image des Typs in den Store laden (Eintrag
+  // "Update suchen" der jeweiligen Geraeteliste). Blockiert, endet im
+  // Reboot.
+  void runNetUpdate(uint8_t what);
   // Draws a final "reboot" frame (the OLED keeps showing the last frame
   // across ESP.restart(), so without this the user cannot tell that the
   // reboot happened), then restarts. Never returns.
