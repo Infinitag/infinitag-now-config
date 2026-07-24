@@ -11,7 +11,7 @@ namespace cfg {
 // Bump on every flashed release – the version check in the device list
 // compares these numbers.
 constexpr uint8_t FW_MAJOR = 0;
-constexpr uint8_t FW_MINOR = 5;
+constexpr uint8_t FW_MINOR = 6;
 constexpr uint8_t FW_PATCH = 0;
 
 // --- GPIO plan v3 (C3 Super Mini) -------------------------------------------
