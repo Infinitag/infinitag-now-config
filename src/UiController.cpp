@@ -711,7 +711,25 @@ void UiController::runNetUpdate(bool resumed) {
   }
 
   // 2) device images into the store
-  if (staNew) {
+  // Das Fach haelt nur EIN Image (1,5-MB-FS, uploadBegin() raeumt vor
+  // jedem Download alles weg) - zwei Downloads nacheinander wuerden
+  // sich ueberschreiben und das erste Image stillschweigend verlieren.
+  // Sind BEIDE neu, waehlt der Nutzer eines; fuers zweite den Lauf nach
+  // dem Verteilen einfach wiederholen (der Vergleich laeuft gegen den
+  // Store, nicht die Geraete - das fehlende Image gilt wieder als NEU).
+  bool loadSta = staNew, loadTgt = tgtNew;
+  if (staNew && tgtNew) {
+    netScreen("Nur 1 Image-Fach:", "Push = Station laden",
+              "K4 = Target laden", "K1 = Abbruch");
+    for (;;) {
+      _in.poll();
+      if (_in.takePress(BTN_ENC)) { loadTgt = false; break; }
+      if (_in.takePress(BTN_K4)) { loadSta = false; break; }
+      if (_in.takePress(BTN_K1)) ESP.restart();
+      delay(10);
+    }
+  }
+  if (loadSta) {
     snprintf(s_netLine, sizeof(s_netLine), "Lade Station-Image");
     netScreen(s_netLine);
     logf("[NET] Lade Station-Image v%u.%u.%u\n", relSta.major, relSta.minor,
@@ -723,7 +741,7 @@ void UiController::runNetUpdate(bool resumed) {
       ESP.restart();
     }
   }
-  if (tgtNew) {
+  if (loadTgt) {
     snprintf(s_netLine, sizeof(s_netLine), "Lade Target-Image");
     netScreen(s_netLine);
     logf("[NET] Lade Target-Image v%u.%u.%u\n", relTgt.major, relTgt.minor,
@@ -736,8 +754,8 @@ void UiController::runNetUpdate(bool resumed) {
     }
   }
 
-  netScreen("Images geladen.", "Verteilen: Geraet >", "Update (OTA)",
-            "Taste = Neustart");
+  netScreen("Image geladen.", "Verteilen: Geraet >", "Update (Funk/OTA)",
+            (staNew && tgtNew) ? "2. Image: Lauf wdh." : "Taste = Neustart");
   uiWaitConfirm(_in);
   delay(800);
   ESP.restart();
