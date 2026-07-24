@@ -8,7 +8,7 @@ ganz ohne WLAN-Router, App oder Laptop.
 ![Plattform](https://img.shields.io/badge/Plattform-ESP32--C3-blue)
 ![Framework](https://img.shields.io/badge/Framework-Arduino%20%2F%20PlatformIO-orange)
 ![Funk](https://img.shields.io/badge/Funk-ESP--NOW-purple)
-![Lizenz](https://img.shields.io/badge/Lizenz-CC%20BY--NC--SA%204.0-lightgrey)
+![Lizenz](https://img.shields.io/badge/Lizenz-PolyForm%20NC%201.0.0-lightgrey)
 
 <!-- TODO: Hero-Foto der Config-Box einfügen:
      ![Infinitag-Config-Box](docs/config-box.jpg) -->
@@ -39,7 +39,7 @@ ganz ohne WLAN-Router, App oder Laptop.
 |---|---|---|
 | **Config-Box** | dieses Repo | Handheld-Konfigurator: Discovery, Einstellungen, Updates, Live-Monitor |
 | **Station** | [infinitag-now-station](https://github.com/Infinitag/infinitag-now-station) | Sound + Zauberstab (Zauber-Auslösung, Laser, Status-LEDs) |
-| **Targets** | infinitag-now-target *(in Arbeit)* | IR-Empfänger an den Zielen, melden Treffer per Funk |
+| **Targets** | [infinitag-now-target](https://github.com/Infinitag/infinitag-now-target) | IR-Empfänger an den Zielen, melden Treffer per Funk |
 | Protokoll-Lib | [infinitag-now-core](https://github.com/Infinitag/infinitag-now-core) | Paketformat, `EspNowService`, SoftAP-Updater, `PROTOCOL.md` |
 | Doku | [infinitag-now](https://github.com/Infinitag/infinitag-now) | Wissensbasis (Hardware, Protokoll, Konzepte) |
 
@@ -107,7 +107,8 @@ Live-Monitor-Filter, ESP-NOW-Sniffer.
 
 ## Lizenz
 
-[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) – Tobias Stewen.
+[PolyForm Noncommercial 1.0.0](LICENSE) – © 2026 Tobias Stewen.
+Kommerzielle Nutzung nur mit Genehmigung: info@hallow-tech.de.
 Ursprung des Namens und der Idee: das Lasertag-Projekt
 [Infinitag](https://github.com/Infinitag) (2017); Infinitag Now ist eine
 komplette Neuentwicklung als Zauberstab-Spiel, entstanden für einen
