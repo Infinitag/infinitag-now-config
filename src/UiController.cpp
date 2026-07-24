@@ -181,39 +181,14 @@ void UiController::enterEdit(Device &d) {
       laserVal = 1 + g;
     }
     add("Laser", laserVal, 0, 1 + LASER_GLOW_MAX, 1, nullptr, FMT_LASER);
+    // Shooter id in the IR telegram: hits are routed back by it. 0 is a
+    // valid value (factory group), see PROTOCOL.md v0x03.
+    add("IR-ID", c.ir_id, 0, IR_ID_MAX, 1);
   } else {
     TargetConfig c;
     decodeTargetConfig(d.info.config_blob, d.info.config_blob_len, c);
-
-    // Build the station pick list: all discovered stations, plus the MAC
-    // currently stored in the target if it is set but not (re)discovered.
-    _staPickCount = 0;
-    int32_t current = 0;
-    for (size_t i = 0; _staPickCount < MAX_STA_PICK; i++) {
-      Device *s = _reg.byIndex(DEV_STATION, i);
-      if (!s) break;
-      memcpy(_staPick[_staPickCount], s->mac, 6);
-      if (memcmp(s->mac, c.station_mac, 6) == 0) current = _staPickCount;
-      _staPickCount++;
-    }
-    static const uint8_t ZERO_MAC[6] = {0};
-    const bool stored = memcmp(c.station_mac, ZERO_MAC, 6) != 0;
-    if (stored && _staPickCount < MAX_STA_PICK) {
-      bool known = false;
-      for (uint8_t i = 0; i < _staPickCount; i++)
-        if (memcmp(_staPick[i], c.station_mac, 6) == 0) {
-          known = true;
-          current = i;
-        }
-      if (!known) {
-        memcpy(_staPick[_staPickCount], c.station_mac, 6);
-        current = _staPickCount;
-        _staPickCount++;
-      }
-    }
-
-    add("Station", current, 0,
-        _staPickCount > 0 ? _staPickCount - 1 : 0, 1, nullptr, FMT_STATION);
+    // No station assignment anymore (v0x03) - the hit sound follows the
+    // shooter automatically.
     add("Sound", c.sound_id, 0, SOUND_COUNT - 1, 1, nullptr, FMT_SOUND);
     add("Hit-Time", c.hit_time_ms, 100, 60000, 100, "ms");
     add("Cooldown", c.cooldown_ms, 0, 60000, 100, "ms");
@@ -248,16 +223,15 @@ void UiController::sendCfgWrite() {
       c.laser_mode = LASER_MODE_GLOW;
       c.laser_glow = (uint8_t)(lv - 1);
     }
+    c.ir_id = (uint8_t)_fields[4].value;
     encodeStationConfig(c, p.payload);
   } else {
     TargetConfig c;
-    if (_staPickCount > 0)
-      memcpy(c.station_mac, _staPick[_fields[0].value], 6);
-    c.sound_id = (uint8_t)_fields[1].value;
-    c.hit_time_ms = (uint16_t)_fields[2].value;
-    c.cooldown_ms = (uint16_t)_fields[3].value;
-    c.sw_animation = (uint8_t)_fields[4].value;
-    c.sw_channels = (uint8_t)_fields[5].value;
+    c.sound_id = (uint8_t)_fields[0].value;
+    c.hit_time_ms = (uint16_t)_fields[1].value;
+    c.cooldown_ms = (uint16_t)_fields[2].value;
+    c.sw_animation = (uint8_t)_fields[3].value;
+    c.sw_channels = (uint8_t)_fields[4].value;
     encodeTargetConfig(c, p.payload);
   }
 
@@ -899,7 +873,7 @@ void UiController::onPacket(const RxPacket &rx) {
       HitEntry &h = _hits[0];
       h.ms = millis();
       memcpy(h.targetMac, rx.mac, 6);
-      decodeHitReport(p.payload, h.stationMac, h.soundId);
+      decodeHitReport(p.payload, h.shooterId, h.soundId, h.damage);
       if (_hitCount < MONITOR_RING) _hitCount++;
       if (_screen == SCR_LIVE_MONITOR) _dirty = true;
       break;
@@ -1525,13 +1499,6 @@ void UiController::render() {
                                 (long)(((f.value - 1) % 2) * 5));
                      }
                      break;
-                   case FMT_STATION:
-                     if (ui->_staPickCount == 0) {
-                       snprintf(val, sizeof(val), "--");
-                     } else {
-                       macSuffix(ui->_staPick[f.value], val);
-                     }
-                     break;
                    case FMT_SOUND:
                      snprintf(val, sizeof(val), "%02ld %s", (long)f.value,
                               soundName((uint8_t)f.value));
@@ -1763,12 +1730,11 @@ void UiController::render() {
                    UiController *ui = ((Ctx *)c)->ui;
                    const HitEntry &h = ui->_hits[i];
                    const uint32_t age = (millis() - h.ms) / 1000;
-                   char tgt[7], sta[7];
+                   char tgt[7];
                    macSuffix(h.targetMac, tgt);
-                   macSuffix(h.stationMac, sta);
-                   snprintf(b, n, "%3lus %s>%s %02u",
-                            (unsigned long)(age > 999 ? 999 : age), tgt, sta,
-                            h.soundId);
+                   snprintf(b, n, "%3lus %s ID%u S%02u",
+                            (unsigned long)(age > 999 ? 999 : age), tgt,
+                            h.shooterId, h.soundId);
                  },
                  &ctx);
       }

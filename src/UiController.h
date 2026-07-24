@@ -70,7 +70,6 @@ class UiController {
     FMT_NUM,      // plain number (+ optional unit)
     FMT_BITS,     // sw_channels: "12-" style
     FMT_LED,      // LED channel mask: letters "R".."RGBW"
-    FMT_STATION,  // index into _staPick, shown as MAC suffix
     FMT_SOUND,    // sound id shown as "06 Daemon" (SoundCatalog)
     FMT_LASER,    // 0 = Aus, 1 = An, 2.. = Nachleuchten (v-1) x 0,5 s
   };
@@ -81,17 +80,14 @@ class UiController {
     FieldFmt fmt;
   };
 
-  // Station picker for the target editor: discovered stations plus (if not
-  // rediscovered) the MAC currently stored in the target.
-  static constexpr size_t MAX_STA_PICK = 8;
-
   // --- live monitor ------------------------------------------------------------
   static constexpr size_t MONITOR_RING = 8;
   struct HitEntry {
     uint32_t ms;
     uint8_t targetMac[6];
-    uint8_t stationMac[6];
+    uint8_t shooterId;  // ir_id from the IR telegram (v0x03)
     uint8_t soundId;
+    uint8_t damage;
   };
 
   // --- device update handshake ---------------------------------------------------
@@ -167,10 +163,6 @@ class UiController {
   bool _awaitingAck = false;
   uint32_t _ackDeadline = 0;
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
-
-  // station picker (target editor)
-  uint8_t _staPick[MAX_STA_PICK][6];
-  uint8_t _staPickCount = 0;
 
   // sound test state
   uint8_t _testSound = 0;
