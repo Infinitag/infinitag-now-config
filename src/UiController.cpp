@@ -66,12 +66,22 @@ void UiController::begin() {
   _oled.setFont(u8g2_font_6x10_tf);
   gotoScreen(SCR_MAIN);
 
-  // Alt-Firmware kann ein Resume-Flag hinterlassen haben (frueher lud
-  // der Lauf nach dem Selbst-Update noch Geraete-Images nach). Images
-  // laedt jetzt der "Update suchen"-Eintrag der Geraetelisten - das
-  // Flag wird nur noch verbraucht.
-  if (NetUpdater::consumeResumeFlag()) {
-    logf("[NET] Altes Resume-Flag verbraucht (Images: Geraetelisten)\n");
+  // Wiedereinstieg nach dem Netz-Update-Reboot: die vor dem Neustart
+  // gewaehlte Aktion ausfuehren - Geraeteliste des geladenen Typs
+  // oeffnen (inkl. frischem Discovery), optional direkt das
+  // Sammel-Update starten, sobald das Discovery-Fenster durch ist.
+  const uint8_t act = NetUpdater::consumeResumeAction();
+  const uint8_t actType = act & ~NetUpdater::RESUME_BULK;
+  if (actType == DEV_STATION || actType == DEV_TARGET) {
+    _listType = actType;
+    gotoScreen(SCR_DEVICE_LIST);
+    startDiscovery(actType);
+    if (act & NetUpdater::RESUME_BULK) {
+      _bootBulkType = actType;
+      _bootBulkAtMs = millis() + 1500;
+    }
+    logf("[NET] Wiedereinstieg: Liste Typ %u%s\n", actType,
+         (act & NetUpdater::RESUME_BULK) ? " + Sammel-Update" : "");
   }
 }
 
@@ -703,10 +713,24 @@ void UiController::runNetUpdate(uint8_t what) {
       uiWaitConfirm(_in);
       ESP.restart();
     }
-    netScreen("Image geladen.", "Verteilen: Geraet >", "Update (Funk/OTA)",
-              "Taste = Neustart");
-    uiWaitConfirm(_in);
-    delay(800);
+    // Nach dem Download nicht ins Hauptmenue zwingen: die Wahl wird als
+    // Resume-Aktion gemerkt, der (noetige) Reboot landet automatisch dort.
+    netScreen("Image geladen.", "Push = Alle aktual.", "K4 = Geraeteliste",
+              "K1 = Hauptmenue");
+    for (;;) {
+      _in.poll();
+      if (_in.takePress(BTN_ENC)) {
+        NetUpdater::setResumeAction(what | NetUpdater::RESUME_BULK);
+        break;
+      }
+      if (_in.takePress(BTN_K4)) {
+        NetUpdater::setResumeAction(what);
+        break;
+      }
+      if (_in.takePress(BTN_K1)) break;
+      delay(10);
+    }
+    delay(200);
     ESP.restart();
   }
 
@@ -1147,6 +1171,18 @@ void UiController::handleInput() {
 
 void UiController::handleTimers() {
   const uint32_t now = millis();
+
+  // Wiedereinstieg "Alle aktualisieren": Sammel-Update starten, sobald
+  // das Discovery nach dem Boot Antworten einsammeln konnte. Ohne
+  // gefundene Geraete bleibt die Liste stehen ("suche Geraete...").
+  if (_bootBulkType != 0 && now >= _bootBulkAtMs) {
+    const uint8_t t = _bootBulkType;
+    _bootBulkType = 0;
+    if (_screen == SCR_DEVICE_LIST && _listType == t && _reg.count(t) > 0) {
+      gotoScreen(SCR_BULK);
+      _dirty = true;
+    }
+  }
 
   // identify blink refresh (Doc 18 §7) – on device rows in the list and
   // while the device menu is open (so you always see WHICH device it is)

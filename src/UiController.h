@@ -169,6 +169,10 @@ class UiController {
   uint32_t _ackDeadline = 0;
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
 
+  // after-boot bulk update (resume action of the net update)
+  uint8_t _bootBulkType = 0;    // 0 = none, else DEV_STATION/DEV_TARGET
+  uint32_t _bootBulkAtMs = 0;   // start once the discovery window passed
+
   // sound test state
   uint8_t _testSound = 0;
 
