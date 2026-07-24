@@ -96,11 +96,13 @@ Interrupt – **kein PCNT auf dem C3!** – plus 5 Tasten entprellt),
   `cfg::FW_*` in `src/Config.h` NICHT eigenmächtig bei Änderungen hoch,
   sondern schlägt vor, wenn ein Stand release-würdig ist, und fragt nach.
   Zwischenstände beim Basteln behalten die Version.
-- **Release-Prozess:** Version in `Config.h` erhöhen → committen →
-  `bash release.sh`. Das Skript baut, taggt `vX.Y.Z`, pusht und erstellt
-  ein **GitHub-Release mit `infinitag-config-vX.Y.Z.bin` als Download**
-  – so ist zu jeder Version die passende Firmware-Datei archiviert
-  (fürs SoftAP-Update einfach vom Release herunterladen).
+- **Release-Prozess:** Version in `Config.h` erhöhen → committen
+  (PR) → Tag pushen: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+  **GitHub Actions** (`.github/workflows/release.yml`) prüft Tag ↔
+  Quellversion, baut gegen den in `platformio.ini` kommentierten
+  Core-Tag (CI-Pin – bei Core-Releases mitpflegen!) und erstellt das
+  **GitHub-Release mit `infinitag-config-vX.Y.Z.bin` als Download**.
+  Lokaler Fallback: `bash release.sh`.
 
 ## Konventionen
 
