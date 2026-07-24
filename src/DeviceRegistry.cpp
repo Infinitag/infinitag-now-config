@@ -20,6 +20,7 @@ void DeviceRegistry::upsert(const uint8_t mac[6], const inow::Packet &pkt) {
   slot->used = true;
   memcpy(slot->mac, mac, 6);
   slot->deviceType = pkt.device_type;
+  slot->proto = pkt.version;
   inow::decodeDiscoverReply(pkt.payload, slot->info);
   slot->lastSeenMs = millis();
 }
