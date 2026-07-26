@@ -10,8 +10,8 @@ namespace cfg {
 // --- Firmware version (reported in DISCOVER_REPLY, shown in Tools menu) ----
 // Bump on every flashed release – the version check in the device list
 // compares these numbers.
-constexpr uint8_t FW_MAJOR = 0;
-constexpr uint8_t FW_MINOR = 6;
+constexpr uint8_t FW_MAJOR = 1;
+constexpr uint8_t FW_MINOR = 0;
 constexpr uint8_t FW_PATCH = 0;
 
 // --- GPIO plan v3 (C3 Super Mini) -------------------------------------------
