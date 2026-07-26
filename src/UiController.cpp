@@ -28,8 +28,9 @@ static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
                                         "Update (OTA)"};
 static constexpr uint8_t DEVMENU_STATION_COUNT = 7;
 static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
-                                       "Update (Funk)", "Update (OTA)"};
-static constexpr uint8_t DEVMENU_TARGET_COUNT = 4;
+                                       "Treffer-Test", "Update (Funk)",
+                                       "Update (OTA)"};
+static constexpr uint8_t DEVMENU_TARGET_COUNT = 5;
 
 static const char *TOOLS_ITEMS[] = {"< Zurueck", "Box-Update suchen",
                                     "Firmware-Info", "Update-Modus",
@@ -66,12 +67,22 @@ void UiController::begin() {
   _oled.setFont(u8g2_font_6x10_tf);
   gotoScreen(SCR_MAIN);
 
-  // Alt-Firmware kann ein Resume-Flag hinterlassen haben (frueher lud
-  // der Lauf nach dem Selbst-Update noch Geraete-Images nach). Images
-  // laedt jetzt der "Update suchen"-Eintrag der Geraetelisten - das
-  // Flag wird nur noch verbraucht.
-  if (NetUpdater::consumeResumeFlag()) {
-    logf("[NET] Altes Resume-Flag verbraucht (Images: Geraetelisten)\n");
+  // Wiedereinstieg nach dem Netz-Update-Reboot: die vor dem Neustart
+  // gewaehlte Aktion ausfuehren - Geraeteliste des geladenen Typs
+  // oeffnen (inkl. frischem Discovery), optional direkt das
+  // Sammel-Update starten, sobald das Discovery-Fenster durch ist.
+  const uint8_t act = NetUpdater::consumeResumeAction();
+  const uint8_t actType = act & ~NetUpdater::RESUME_BULK;
+  if (actType == DEV_STATION || actType == DEV_TARGET) {
+    _listType = actType;
+    gotoScreen(SCR_DEVICE_LIST);
+    startDiscovery(actType);
+    if (act & NetUpdater::RESUME_BULK) {
+      _bootBulkType = actType;
+      _bootBulkAtMs = millis() + 1500;
+    }
+    logf("[NET] Wiedereinstieg: Liste Typ %u%s\n", actType,
+         (act & NetUpdater::RESUME_BULK) ? " + Sammel-Update" : "");
   }
 }
 
@@ -192,10 +203,16 @@ void UiController::enterEdit(Device &d) {
     // No station assignment anymore (v0x03) - the hit sound follows the
     // shooter automatically.
     add("Sound", c.sound_id, 0, SOUND_COUNT - 1, 1, nullptr, FMT_SOUND);
-    add("Hit-Time", c.hit_time_ms, 100, 60000, 100, "ms");
-    add("Cooldown", c.cooldown_ms, 0, 60000, 100, "ms");
-    add("SW-Anim", c.sw_animation, 0, 1, 1);
-    add("SW-Kanal", c.sw_channels, 0, 7, 1, nullptr, FMT_BITS);
+    // Zeiten intern in ms, Anzeige/Bedienung in Sekunden mit einer
+    // Nachkommastelle (Schritt 0,1 s; schnelles Drehen = 1 s).
+    add("Hit-Zeit", c.hit_time_ms, 100, 60000, 100, nullptr, FMT_SECS1);
+    add("Cooldown", c.cooldown_ms, 0, 60000, 100, nullptr, FMT_SECS1);
+    add("Prop-Modus", c.sw_animation, 0, 1, 1, nullptr, FMT_SWANIM);
+    // Jeder Prop-Ausgang einzeln (PCB-Namen; SW = potentialfreier
+    // Optokoppler, 5V/3V = geschaltete Spannungen, PWR = nur Versorgung).
+    add("Ausg. SW", (c.sw_channels >> 0) & 1, 0, 1, 1, nullptr, FMT_BOOL);
+    add("Ausg. 5V", (c.sw_channels >> 1) & 1, 0, 1, 1, nullptr, FMT_BOOL);
+    add("Ausg. 3V", (c.sw_channels >> 2) & 1, 0, 1, 1, nullptr, FMT_BOOL);
     add("LED-Hell.", c.led_bright_pct == 0 ? 100 : c.led_bright_pct, 1, 100,
         1, "%");
   }
@@ -236,8 +253,10 @@ void UiController::sendCfgWrite() {
     c.hit_time_ms = (uint16_t)_fields[1].value;
     c.cooldown_ms = (uint16_t)_fields[2].value;
     c.sw_animation = (uint8_t)_fields[3].value;
-    c.sw_channels = (uint8_t)_fields[4].value;
-    c.led_bright_pct = (uint8_t)_fields[5].value;
+    c.sw_channels = (uint8_t)((_fields[4].value ? 1 : 0) |
+                              (_fields[5].value ? 2 : 0) |
+                              (_fields[6].value ? 4 : 0));
+    c.led_bright_pct = (uint8_t)_fields[7].value;
     encodeTargetConfig(c, p.payload);
   }
 
@@ -703,10 +722,24 @@ void UiController::runNetUpdate(uint8_t what) {
       uiWaitConfirm(_in);
       ESP.restart();
     }
-    netScreen("Image geladen.", "Verteilen: Geraet >", "Update (Funk/OTA)",
-              "Taste = Neustart");
-    uiWaitConfirm(_in);
-    delay(800);
+    // Nach dem Download nicht ins Hauptmenue zwingen: die Wahl wird als
+    // Resume-Aktion gemerkt, der (noetige) Reboot landet automatisch dort.
+    netScreen("Image geladen.", "Push = Alle aktual.", "K4 = Geraeteliste",
+              "K1 = Hauptmenue");
+    for (;;) {
+      _in.poll();
+      if (_in.takePress(BTN_ENC)) {
+        NetUpdater::setResumeAction(what | NetUpdater::RESUME_BULK);
+        break;
+      }
+      if (_in.takePress(BTN_K4)) {
+        NetUpdater::setResumeAction(what);
+        break;
+      }
+      if (_in.takePress(BTN_K1)) break;
+      delay(10);
+    }
+    delay(200);
     ESP.restart();
   }
 
@@ -920,7 +953,7 @@ void UiController::handleInput() {
         // "< Zurueck" and "Update (OTA)" work - config blobs are not
         // interpretable and the radio push is version-locked.
         const uint8_t updOta =
-            _editDev.deviceType == DEV_STATION ? 6 : 3;
+            _editDev.deviceType == DEV_STATION ? 6 : 4;
         if (_editDev.foreignProto() && _cursor != 0 && _cursor != updOta) {
           break;
         }
@@ -944,11 +977,22 @@ void UiController::handleInput() {
           switch (_cursor) {
             case 0: gotoScreen(SCR_DEVICE_LIST); break;
             case 1: enterEdit(_editDev); break;
-            case 2:
+            case 2: {
+              // Treffer-Simulation (DBG_HIT): das Target faehrt die
+              // komplette Treffer-Sequenz - Zeiten ohne Station einstellen.
+              Packet p;
+              init(p, MSG_DEBUG_CMD, DEV_TARGET);
+              p.payload[0] = DBG_HIT;
+              _net.send(_editDev.mac, p);
+              snprintf(_menuMsg, sizeof(_menuMsg), "Treffer-Test gesendet");
+              _menuMsgUntil = millis() + 2000;
+              break;
+            }
+            case 3:
               _bulk = false;
               gotoScreen(SCR_PUSH);
               break;
-            case 3: gotoScreen(SCR_DEV_UPDATE); break;
+            case 4: gotoScreen(SCR_DEV_UPDATE); break;
           }
         }
       }
@@ -1148,14 +1192,34 @@ void UiController::handleInput() {
 void UiController::handleTimers() {
   const uint32_t now = millis();
 
+  // transient device-menu footer expired? -> redraw without it
+  if (_menuMsg[0] && now >= _menuMsgUntil) {
+    _menuMsg[0] = '\0';
+    if (_screen == SCR_DEVICE_MENU) _dirty = true;
+  }
+
+  // Wiedereinstieg "Alle aktualisieren": Sammel-Update starten, sobald
+  // das Discovery nach dem Boot Antworten einsammeln konnte. Ohne
+  // gefundene Geraete bleibt die Liste stehen ("suche Geraete...").
+  if (_bootBulkType != 0 && now >= _bootBulkAtMs) {
+    const uint8_t t = _bootBulkType;
+    _bootBulkType = 0;
+    if (_screen == SCR_DEVICE_LIST && _listType == t && _reg.count(t) > 0) {
+      gotoScreen(SCR_BULK);
+      _dirty = true;
+    }
+  }
+
   // identify blink refresh (Doc 18 §7) – on device rows in the list and
-  // while the device menu is open (so you always see WHICH device it is)
+  // while the device menu OR its editor is open (so you always see WHICH
+  // device you are configuring; targets suppress the blink themselves
+  // while a hit sequence is running)
   if (_identifyEnabled && now - _lastIdentifyMs >= cfg::IDENTIFY_PERIOD_MS) {
     if (_screen == SCR_DEVICE_LIST && _cursor >= LIST_STATIC_ROWS) {
       Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
       if (d) sendIdentify(*d);
       _lastIdentifyMs = now;
-    } else if (_screen == SCR_DEVICE_MENU) {
+    } else if (_screen == SCR_DEVICE_MENU || _screen == SCR_DEVICE_EDIT) {
       sendIdentify(_editDev);
       _lastIdentifyMs = now;
     }
@@ -1411,7 +1475,9 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
-      if (_editDev.foreignProto())
+      if (_menuMsg[0] && millis() < _menuMsgUntil)
+        drawFooter(_menuMsg);
+      else if (_editDev.foreignProto())
         drawFooter("Fremdversion: nur OTA!");
       break;
     }
@@ -1480,11 +1546,18 @@ void UiController::render() {
                      val[k] = '\0';
                      break;
                    }
-                   case FMT_BITS:
-                     snprintf(val, sizeof(val), "%c%c%c",
-                              (f.value & 1) ? '1' : '-',
-                              (f.value & 2) ? '2' : '-',
-                              (f.value & 4) ? '3' : '-');
+                   case FMT_SECS1:
+                     snprintf(val, sizeof(val), "%ld,%lds",
+                              (long)(f.value / 1000),
+                              (long)((f.value % 1000) / 100));
+                     break;
+                   case FMT_SWANIM:
+                     snprintf(val, sizeof(val), "%s",
+                              f.value == 0 ? "Dauer-an" : "3x Puls");
+                     break;
+                   case FMT_BOOL:
+                     snprintf(val, sizeof(val), "%s",
+                              f.value ? "Ja" : "Nein");
                      break;
                    case FMT_LASER:
                      if (f.value == 0) {
@@ -1507,10 +1580,14 @@ void UiController::render() {
                               f.unit ? f.unit : "");
                      break;
                  }
+                 // Kein festes Label-Padding: 128 px zeigen ab x=7 nur
+                 // ~20 Zeichen - gepolsterte Zeilen wie
+                 // "Prop-Modus:[Dauer-an]" wurden am Ende abgeschnitten,
+                 // Wertwechsel waren dann unsichtbar. Edit-Marker = '>'.
                  const bool editing =
                      ui->_valueEditing && i == ui->_cursor;
-                 snprintf(b, n, "%-10s:%s%s%s", f.label,
-                          editing ? "[" : " ", val, editing ? "]" : "");
+                 snprintf(b, n, "%s:%s%s", f.label, editing ? ">" : " ",
+                          val);
                },
                &ctx);
 

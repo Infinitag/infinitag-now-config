@@ -43,20 +43,20 @@ void NetUpdater::getWifiSsid(char *out, size_t n) {
 // helpers
 // ---------------------------------------------------------------------------
 
-void NetUpdater::setResumeFlag() {
+void NetUpdater::setResumeAction(uint8_t action) {
   Preferences prefs;
   prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
-  prefs.putUChar("resume", 1);
+  prefs.putUChar("resume", action);
   prefs.end();
 }
 
-bool NetUpdater::consumeResumeFlag() {
+uint8_t NetUpdater::consumeResumeAction() {
   Preferences prefs;
   prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
-  const bool set = prefs.getUChar("resume", 0) != 0;
-  if (set) prefs.remove("resume");
+  const uint8_t action = prefs.getUChar("resume", 0);
+  if (action) prefs.remove("resume");
   prefs.end();
-  return set;
+  return action;
 }
 
 void NetUpdater::setError(const char *msg) {

@@ -46,8 +46,12 @@ class NetUpdater {
 
   // One-shot resume flag (NVS): set before the self-update reboot so the
   // NEW firmware automatically continues the interrupted update run.
-  static void setResumeFlag();
-  static bool consumeResumeFlag();  // true exactly once, clears the flag
+  // One-shot action for the reboot that ends every net-update run:
+  // 0 = none, sonst Geraetetyp (DEV_STATION/DEV_TARGET), optional
+  // ODER-verknuepft mit RESUME_BULK = direkt das Sammel-Update starten.
+  static constexpr uint8_t RESUME_BULK = 0x80;
+  static void setResumeAction(uint8_t action);
+  static uint8_t consumeResumeAction();  // liefert genau einmal, loescht
 
   // Stream the box's own new firmware into the OTA slot. true = flashed
   // and boot partition switched; caller shows "OK" and reboots.
