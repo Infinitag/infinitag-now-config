@@ -1492,11 +1492,14 @@ void UiController::render() {
                               f.value == 0 ? "Dauer-an" : "3x Puls");
                      break;
                    case FMT_SWCH:
+                     // PCB-Bezeichnungen des Targets: SW = potential-
+                     // freier Optokoppler, 5V/3V = geschaltete Spannungen
+                     // (PWR ist nur die Versorgung, kein Ausgang).
                      if (f.value == 0) {
                        snprintf(val, sizeof(val), "aus");
                      } else {
                        snprintf(val, sizeof(val), "%s%s%s%s%s",
-                                (f.value & 1) ? "K1" : "",
+                                (f.value & 1) ? "SW" : "",
                                 ((f.value & 1) && (f.value & 6)) ? "+" : "",
                                 (f.value & 2) ? "5V" : "",
                                 ((f.value & 2) && (f.value & 4)) ? "+" : "",

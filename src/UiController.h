@@ -74,7 +74,7 @@ class UiController {
     FMT_LASER,    // 0 = Aus, 1 = An, 2.. = Nachleuchten (v-1) x 0,5 s
     FMT_SECS1,    // ms value shown as seconds with one decimal ("10,5s")
     FMT_SWANIM,   // prop pattern: 0 = "Dauer-an", 1 = "3x Puls"
-    FMT_SWCH,     // prop outputs: bitmask shown as "K1+5V+3V" / "aus"
+    FMT_SWCH,     // prop outputs: bitmask shown as "SW+5V+3V" / "aus"
   };
   struct Field {
     const char *label;
