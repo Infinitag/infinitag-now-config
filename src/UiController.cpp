@@ -1175,13 +1175,15 @@ void UiController::handleTimers() {
   }
 
   // identify blink refresh (Doc 18 §7) – on device rows in the list and
-  // while the device menu is open (so you always see WHICH device it is)
+  // while the device menu OR its editor is open (so you always see WHICH
+  // device you are configuring; targets suppress the blink themselves
+  // while a hit sequence is running)
   if (_identifyEnabled && now - _lastIdentifyMs >= cfg::IDENTIFY_PERIOD_MS) {
     if (_screen == SCR_DEVICE_LIST && _cursor >= LIST_STATIC_ROWS) {
       Device *d = _reg.byIndex(_listType, _cursor - LIST_STATIC_ROWS);
       if (d) sendIdentify(*d);
       _lastIdentifyMs = now;
-    } else if (_screen == SCR_DEVICE_MENU) {
+    } else if (_screen == SCR_DEVICE_MENU || _screen == SCR_DEVICE_EDIT) {
       sendIdentify(_editDev);
       _lastIdentifyMs = now;
     }
