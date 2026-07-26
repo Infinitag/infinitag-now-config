@@ -18,18 +18,20 @@ ganz ohne WLAN-Router, App oder Laptop.
 - **Geräte finden statt einrichten:** Ein Discovery-Broadcast listet
   alle Stationen und Targets in Reichweite (MAC-Kennung + Signalstärke);
   das markierte Gerät blinkt weiß – man sieht sofort, welches gemeint ist
-- **Alles einstellbar:** Lautstärke, Stab-Statusfarben, IR-ID der
-  Stationen (Schützen-Kennung – der Treffer-Sound folgt automatisch dem
-  Zauberstab, der geschossen hat), Sounds und Trefferzeiten der Targets –
-  Werte werden direkt ins Gerät geschrieben und dort dauerhaft
-  gespeichert
-- **Testen aus der Ferne:** Sound-Vorhören und kompletter
+- **Alles einstellbar:** Lautstärke, Stab-Statusfarben und -Helligkeit,
+  IR-ID der Stationen (Schützen-Kennung – der Treffer-Sound folgt
+  automatisch dem Zauberstab, der geschossen hat), Sounds, Trefferzeiten
+  (in Sekunden), Prop-Ausgänge und Ring-Helligkeit der Targets – Werte
+  werden direkt ins Gerät geschrieben und dort dauerhaft gespeichert
+- **Testen aus der Ferne:** Sound-Vorhören, kompletter
   Stations-Selbsttest (Sound, LEDs, Laser, IR mit Selbstempfang,
-  Trigger) auf Knopfdruck
-- **Updates über die Luft:** Schickt jedes Gerät in den
-  SoftAP-Update-Modus, meldet den Erfolg samt neuer Version zurück und
-  markiert veraltete Firmware in der Liste (`^`); die eigene Firmware
-  aktualisiert sich über denselben Weg
+  Trigger) und der **Treffer-Test** – ein Target spielt die komplette
+  Treffer-Sequenz ab, um Zeiten und Props ohne Station einzustellen
+- **Updates über die Luft:** Die Box holt sich Releases **selbst von
+  GitHub** (Netz-Update): das eigene über Tools → „Box-Update suchen",
+  Geräte-Images über „Update suchen" in der jeweiligen Geräteliste –
+  verteilt wird per ESP-NOW-Funk-Push oder SoftAP; veraltete Firmware
+  wird in der Liste markiert (`^`)
 - **Live-Monitor:** Zeigt eingehende Treffer-Meldungen in Echtzeit –
   praktisch beim Aufbau und bei der Fehlersuche
 - **Batteriebetrieb:** 4×AA, Batteriespannung im Tools-Menü; vor einem
@@ -78,7 +80,10 @@ an/aus, K4 = OK.
 ## Updates
 
 Jede Version gibt es als [GitHub-Release](../../releases) mit fertiger
-`infinitag-config-vX.Y.Z.bin`. Einspielen ohne Kabel:
+`infinitag-config-vX.Y.Z.bin`. Am bequemsten per **Netz-Update**:
+Tools → **„Box-Update suchen"** – die Box lädt und installiert das
+Release selbst (WLAN dafür einmalig im Update-Modus hinterlegen).
+Alternativ der SoftAP-Weg:
 
 1. Tools → **„Update-Modus"** (prüft vorher den Batteriestand)
 2. Die Box öffnet ein WLAN `infinitag-cfg-XXXXXX`
