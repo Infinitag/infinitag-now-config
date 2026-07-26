@@ -48,6 +48,7 @@ p{color:#8a9092;margin:0 0 10px;line-height:1.5}
 .file span{background:#24292b;color:#d7dbdb;border:1px solid #3a4144;border-radius:4px;padding:6px 14px;font-weight:700;white-space:nowrap}
 .file i{font-style:normal;color:#6e7578;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file input{display:none}
+.file.drag{border-color:#79C8B4;background:#1b2422}
 input[type=text],input[type=password]{background:#131516;border:1px solid #3a4144;border-radius:6px;color:#e8eaea;padding:9px 12px;font-size:13px}
 button,a.btn{align-self:flex-start;display:inline-block;background:transparent;color:#79C8B4;border:1px solid #0d8c80;border-radius:4px;padding:8px 18px;font-size:13px;font-weight:700;cursor:pointer}
 button:hover,a.btn:hover{background:#0d8c80;color:#fff}
@@ -152,8 +153,14 @@ static const char WEB_PAGE_BOTTOM[] = R"rawpage(
 </div>
 </div>
 <script>
-document.querySelectorAll('.file input').forEach(function(f){
-f.addEventListener('change',function(){f.parentNode.querySelector('i').textContent=f.files.length?f.files[0].name:'Keine Datei ausgewählt';});
+document.querySelectorAll('label.file').forEach(function(l){
+var f=l.querySelector('input');
+function nm(){l.querySelector('i').textContent=f.files.length?f.files[0].name:'Keine Datei ausgewählt';}
+f.addEventListener('change',nm);
+var z=l.closest('form')||l;
+['dragover','dragenter'].forEach(function(ev){z.addEventListener(ev,function(e){e.preventDefault();l.classList.add('drag');});});
+z.addEventListener('dragleave',function(){l.classList.remove('drag');});
+z.addEventListener('drop',function(e){e.preventDefault();l.classList.remove('drag');if(e.dataTransfer.files.length){f.files=e.dataTransfer.files;nm();}});
 });
 </script>
 </body>

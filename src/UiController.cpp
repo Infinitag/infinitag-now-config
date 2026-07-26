@@ -197,7 +197,11 @@ void UiController::enterEdit(Device &d) {
     add("Hit-Zeit", c.hit_time_ms, 100, 60000, 100, nullptr, FMT_SECS1);
     add("Cooldown", c.cooldown_ms, 0, 60000, 100, nullptr, FMT_SECS1);
     add("Prop-Modus", c.sw_animation, 0, 1, 1, nullptr, FMT_SWANIM);
-    add("Prop-Ausg.", c.sw_channels, 0, 7, 1, nullptr, FMT_SWCH);
+    // Jeder Prop-Ausgang einzeln (PCB-Namen; SW = potentialfreier
+    // Optokoppler, 5V/3V = geschaltete Spannungen, PWR = nur Versorgung).
+    add("Ausg. SW", (c.sw_channels >> 0) & 1, 0, 1, 1, nullptr, FMT_BOOL);
+    add("Ausg. 5V", (c.sw_channels >> 1) & 1, 0, 1, 1, nullptr, FMT_BOOL);
+    add("Ausg. 3V", (c.sw_channels >> 2) & 1, 0, 1, 1, nullptr, FMT_BOOL);
     add("LED-Hell.", c.led_bright_pct == 0 ? 100 : c.led_bright_pct, 1, 100,
         1, "%");
   }
@@ -238,8 +242,10 @@ void UiController::sendCfgWrite() {
     c.hit_time_ms = (uint16_t)_fields[1].value;
     c.cooldown_ms = (uint16_t)_fields[2].value;
     c.sw_animation = (uint8_t)_fields[3].value;
-    c.sw_channels = (uint8_t)_fields[4].value;
-    c.led_bright_pct = (uint8_t)_fields[5].value;
+    c.sw_channels = (uint8_t)((_fields[4].value ? 1 : 0) |
+                              (_fields[5].value ? 2 : 0) |
+                              (_fields[6].value ? 4 : 0));
+    c.led_bright_pct = (uint8_t)_fields[7].value;
     encodeTargetConfig(c, p.payload);
   }
 
@@ -1491,20 +1497,9 @@ void UiController::render() {
                      snprintf(val, sizeof(val), "%s",
                               f.value == 0 ? "Dauer-an" : "3x Puls");
                      break;
-                   case FMT_SWCH:
-                     // PCB-Bezeichnungen des Targets: SW = potential-
-                     // freier Optokoppler, 5V/3V = geschaltete Spannungen
-                     // (PWR ist nur die Versorgung, kein Ausgang).
-                     if (f.value == 0) {
-                       snprintf(val, sizeof(val), "aus");
-                     } else {
-                       snprintf(val, sizeof(val), "%s%s%s%s%s",
-                                (f.value & 1) ? "SW" : "",
-                                ((f.value & 1) && (f.value & 6)) ? "+" : "",
-                                (f.value & 2) ? "5V" : "",
-                                ((f.value & 2) && (f.value & 4)) ? "+" : "",
-                                (f.value & 4) ? "3V" : "");
-                     }
+                   case FMT_BOOL:
+                     snprintf(val, sizeof(val), "%s",
+                              f.value ? "Ja" : "Nein");
                      break;
                    case FMT_LASER:
                      if (f.value == 0) {
@@ -1527,10 +1522,14 @@ void UiController::render() {
                               f.unit ? f.unit : "");
                      break;
                  }
+                 // Kein festes Label-Padding: 128 px zeigen ab x=7 nur
+                 // ~20 Zeichen - gepolsterte Zeilen wie
+                 // "Prop-Modus:[Dauer-an]" wurden am Ende abgeschnitten,
+                 // Wertwechsel waren dann unsichtbar. Edit-Marker = '>'.
                  const bool editing =
                      ui->_valueEditing && i == ui->_cursor;
-                 snprintf(b, n, "%-10s:%s%s%s", f.label,
-                          editing ? "[" : " ", val, editing ? "]" : "");
+                 snprintf(b, n, "%s:%s%s", f.label, editing ? ">" : " ",
+                          val);
                },
                &ctx);
 
