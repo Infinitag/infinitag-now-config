@@ -192,10 +192,12 @@ void UiController::enterEdit(Device &d) {
     // No station assignment anymore (v0x03) - the hit sound follows the
     // shooter automatically.
     add("Sound", c.sound_id, 0, SOUND_COUNT - 1, 1, nullptr, FMT_SOUND);
-    add("Hit-Time", c.hit_time_ms, 100, 60000, 100, "ms");
-    add("Cooldown", c.cooldown_ms, 0, 60000, 100, "ms");
-    add("SW-Anim", c.sw_animation, 0, 1, 1);
-    add("SW-Kanal", c.sw_channels, 0, 7, 1, nullptr, FMT_BITS);
+    // Zeiten intern in ms, Anzeige/Bedienung in Sekunden mit einer
+    // Nachkommastelle (Schritt 0,1 s; schnelles Drehen = 1 s).
+    add("Hit-Zeit", c.hit_time_ms, 100, 60000, 100, nullptr, FMT_SECS1);
+    add("Cooldown", c.cooldown_ms, 0, 60000, 100, nullptr, FMT_SECS1);
+    add("Prop-Modus", c.sw_animation, 0, 1, 1, nullptr, FMT_SWANIM);
+    add("Prop-Ausg.", c.sw_channels, 0, 7, 1, nullptr, FMT_SWCH);
     add("LED-Hell.", c.led_bright_pct == 0 ? 100 : c.led_bright_pct, 1, 100,
         1, "%");
   }
@@ -1480,11 +1482,26 @@ void UiController::render() {
                      val[k] = '\0';
                      break;
                    }
-                   case FMT_BITS:
-                     snprintf(val, sizeof(val), "%c%c%c",
-                              (f.value & 1) ? '1' : '-',
-                              (f.value & 2) ? '2' : '-',
-                              (f.value & 4) ? '3' : '-');
+                   case FMT_SECS1:
+                     snprintf(val, sizeof(val), "%ld,%lds",
+                              (long)(f.value / 1000),
+                              (long)((f.value % 1000) / 100));
+                     break;
+                   case FMT_SWANIM:
+                     snprintf(val, sizeof(val), "%s",
+                              f.value == 0 ? "Dauer-an" : "3x Puls");
+                     break;
+                   case FMT_SWCH:
+                     if (f.value == 0) {
+                       snprintf(val, sizeof(val), "aus");
+                     } else {
+                       snprintf(val, sizeof(val), "%s%s%s%s%s",
+                                (f.value & 1) ? "K1" : "",
+                                ((f.value & 1) && (f.value & 6)) ? "+" : "",
+                                (f.value & 2) ? "5V" : "",
+                                ((f.value & 2) && (f.value & 4)) ? "+" : "",
+                                (f.value & 4) ? "3V" : "");
+                     }
                      break;
                    case FMT_LASER:
                      if (f.value == 0) {
