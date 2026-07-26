@@ -171,6 +171,10 @@ class UiController {
   uint32_t _ackDeadline = 0;
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
 
+  // transient footer message in the device menu (e.g. "Treffer-Test")
+  char _menuMsg[24] = "";
+  uint32_t _menuMsgUntil = 0;
+
   // sound test state
   uint8_t _testSound = 0;
 

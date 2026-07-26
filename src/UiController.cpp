@@ -28,8 +28,9 @@ static const char *DEVMENU_STATION[] = {"< Zurueck", "Konfigurieren",
                                         "Update (OTA)"};
 static constexpr uint8_t DEVMENU_STATION_COUNT = 7;
 static const char *DEVMENU_TARGET[] = {"< Zurueck", "Konfigurieren",
-                                       "Update (Funk)", "Update (OTA)"};
-static constexpr uint8_t DEVMENU_TARGET_COUNT = 4;
+                                       "Treffer-Test", "Update (Funk)",
+                                       "Update (OTA)"};
+static constexpr uint8_t DEVMENU_TARGET_COUNT = 5;
 
 static const char *TOOLS_ITEMS[] = {"< Zurueck", "Box-Update suchen",
                                     "Firmware-Info", "Update-Modus",
@@ -928,7 +929,7 @@ void UiController::handleInput() {
         // "< Zurueck" and "Update (OTA)" work - config blobs are not
         // interpretable and the radio push is version-locked.
         const uint8_t updOta =
-            _editDev.deviceType == DEV_STATION ? 6 : 3;
+            _editDev.deviceType == DEV_STATION ? 6 : 4;
         if (_editDev.foreignProto() && _cursor != 0 && _cursor != updOta) {
           break;
         }
@@ -952,11 +953,22 @@ void UiController::handleInput() {
           switch (_cursor) {
             case 0: gotoScreen(SCR_DEVICE_LIST); break;
             case 1: enterEdit(_editDev); break;
-            case 2:
+            case 2: {
+              // Treffer-Simulation (DBG_HIT): das Target faehrt die
+              // komplette Treffer-Sequenz - Zeiten ohne Station einstellen.
+              Packet p;
+              init(p, MSG_DEBUG_CMD, DEV_TARGET);
+              p.payload[0] = DBG_HIT;
+              _net.send(_editDev.mac, p);
+              snprintf(_menuMsg, sizeof(_menuMsg), "Treffer-Test gesendet");
+              _menuMsgUntil = millis() + 2000;
+              break;
+            }
+            case 3:
               _bulk = false;
               gotoScreen(SCR_PUSH);
               break;
-            case 3: gotoScreen(SCR_DEV_UPDATE); break;
+            case 4: gotoScreen(SCR_DEV_UPDATE); break;
           }
         }
       }
@@ -1155,6 +1167,12 @@ void UiController::handleInput() {
 
 void UiController::handleTimers() {
   const uint32_t now = millis();
+
+  // transient device-menu footer expired? -> redraw without it
+  if (_menuMsg[0] && now >= _menuMsgUntil) {
+    _menuMsg[0] = '\0';
+    if (_screen == SCR_DEVICE_MENU) _dirty = true;
+  }
 
   // identify blink refresh (Doc 18 §7) – on device rows in the list and
   // while the device menu is open (so you always see WHICH device it is)
@@ -1419,7 +1437,9 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
-      if (_editDev.foreignProto())
+      if (_menuMsg[0] && millis() < _menuMsgUntil)
+        drawFooter(_menuMsg);
+      else if (_editDev.foreignProto())
         drawFooter("Fremdversion: nur OTA!");
       break;
     }
