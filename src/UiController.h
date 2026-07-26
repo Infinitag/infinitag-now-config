@@ -69,10 +69,12 @@ class UiController {
   static constexpr size_t MAX_FIELDS = 8;
   enum FieldFmt : uint8_t {
     FMT_NUM,      // plain number (+ optional unit)
-    FMT_BITS,     // sw_channels: "12-" style
     FMT_LED,      // LED channel mask: letters "R".."RGBW"
     FMT_SOUND,    // sound id shown as "06 Daemon" (SoundCatalog)
     FMT_LASER,    // 0 = Aus, 1 = An, 2.. = Nachleuchten (v-1) x 0,5 s
+    FMT_SECS1,    // ms value shown as seconds with one decimal ("10,5s")
+    FMT_SWANIM,   // prop pattern: 0 = "Dauer-an", 1 = "3x Puls"
+    FMT_BOOL,     // 0/1 shown as "Nein"/"Ja" (e.g. one prop output)
   };
   struct Field {
     const char *label;
@@ -168,6 +170,14 @@ class UiController {
   bool _awaitingAck = false;
   uint32_t _ackDeadline = 0;
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
+
+  // after-boot bulk update (resume action of the net update)
+  uint8_t _bootBulkType = 0;    // 0 = none, else DEV_STATION/DEV_TARGET
+  uint32_t _bootBulkAtMs = 0;   // start once the discovery window passed
+
+  // transient footer message in the device menu (e.g. "Treffer-Test")
+  char _menuMsg[24] = "";
+  uint32_t _menuMsgUntil = 0;
 
   // sound test state
   uint8_t _testSound = 0;
