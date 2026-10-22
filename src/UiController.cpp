@@ -65,6 +65,7 @@ void UiController::begin() {
   }
   _oled.begin();
   _oled.setFont(u8g2_font_6x10_tf);
+  pollBattery(millis());  // first sample now: icon correct on frame one
   gotoScreen(SCR_MAIN);
 
   // Wiedereinstieg nach dem Netz-Update-Reboot: die vor dem Neustart
@@ -341,6 +342,47 @@ float UiController::readVbat() const {
   return (mvAcc / 8) * cfg::VBAT_DIVIDER / 1000.0f;
 }
 
+void UiController::pollBattery(uint32_t now) {
+  if ((int32_t)(now - _vbatNextMs) >= 0) {
+    _vbatNextMs = now + cfg::VBAT_POLL_MS;
+    _vbat = readVbat();
+    uint8_t lvl = _battLevel;
+    if (_vbat <= cfg::VBAT_USB_V) {
+      lvl = 0;  // divider floats: USB powered, nothing to supervise
+    } else {
+      // step DOWN (worse) right at the threshold, step UP (better) only
+      // once the reading sits clearly above it - the 8-sample average
+      // still scatters by ~0.1 V between polls
+      if (lvl < 2 && _vbat <= cfg::VBAT_REPLACE_V) {
+        lvl = 2;
+      } else if (lvl == 2 && _vbat > cfg::VBAT_REPLACE_V + cfg::VBAT_HYST_V) {
+        lvl = 1;
+      }
+      if (lvl < 1 && _vbat <= cfg::VBAT_WARN_V) {
+        lvl = 1;
+      } else if (lvl == 1 && _vbat > cfg::VBAT_WARN_V + cfg::VBAT_HYST_V) {
+        lvl = 0;
+      }
+    }
+    if (lvl != _battLevel) {
+      _battLevel = lvl;
+      _blinkOn = true;
+      _blinkMs = now;
+      logf("[BAT] %.2f V -> Stufe %u\n", (double)_vbat, lvl);
+      _dirty = true;
+    }
+  }
+  if (_battLevel && now - _blinkMs >= cfg::VBAT_BLINK_MS) {
+    _blinkMs = now;
+    _blinkOn = !_blinkOn;
+    // no extra repaints while the push sender runs: rendering blocks the
+    // I2C bus and with it the loop that feeds the sender (see tick)
+    const bool pushing =
+        (_screen == SCR_PUSH || _screen == SCR_BULK) && _pushPhase == 0;
+    if (!pushing) _dirty = true;
+  }
+}
+
 // StoreHooks bridge (WebUpdateService callbacks are plain C functions).
 static ImageStore *s_imgStore = nullptr;
 static bool storeBegin(const char *) { return s_imgStore->uploadBegin(); }
@@ -460,7 +502,7 @@ void UiController::buildWebPages() {
              (unsigned)(ESP.getMinFreeHeap() / 1024));
     st += b;
     const float vbat = readVbat();
-    if (vbat > 3.0f) {
+    if (vbat > cfg::VBAT_USB_V) {
       snprintf(b, sizeof(b), "<p>Batterie: <b>%.2f V</b></p>", (double)vbat);
     } else {
       snprintf(b, sizeof(b), "<p>Versorgung: <b>USB</b></p>");
@@ -486,7 +528,7 @@ void UiController::beginSelfUpdate() {
   // Battery gate: never start flashing on a nearly empty pack. Readings
   // below 3.0 V mean "no battery / USB powered" and are fine.
   const float vbat = readVbat();
-  if (vbat > 3.0f && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
+  if (vbat > cfg::VBAT_USB_V && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
     _selfUpd = SELFUPD_REFUSED;
     return;
   }
@@ -637,9 +679,11 @@ bool uiWaitConfirm(InputController &in) {
 void UiController::runNetUpdate(uint8_t what) {
   // battery gate as with the SoftAP update mode
   const float vbat = readVbat();
-  if (vbat > 3.0f && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
-    netScreen("Akku zu leer!", "(min. 3.6 V oder USB)", nullptr,
-              "Taste = Zurueck");
+  if (vbat > cfg::VBAT_USB_V && vbat < cfg::VBAT_MIN_FOR_UPDATE) {
+    char lim[24];
+    snprintf(lim, sizeof(lim), "(min. %.1f V oder USB)",
+             (double)cfg::VBAT_MIN_FOR_UPDATE);
+    netScreen("Akku zu leer!", lim, nullptr, "Taste = Zurueck");
     uiWaitConfirm(_in);
     ESP.restart();
   }
@@ -1192,6 +1236,8 @@ void UiController::handleInput() {
 void UiController::handleTimers() {
   const uint32_t now = millis();
 
+  pollBattery(now);
+
   // transient device-menu footer expired? -> redraw without it
   if (_menuMsg[0] && now >= _menuMsgUntil) {
     _menuMsg[0] = '\0';
@@ -1393,12 +1439,28 @@ void UiController::drawTitle(const char *title, int count) {
   _oled.drawBox(0, 0, 128, 16);
   _oled.setDrawColor(0);
   _oled.drawStr(2, 12, title);
+  // Battery warning reserves the right 16 px as long as the level is
+  // active (not only on blink-on, or the count would jitter).
+  const int reserve = _battLevel ? 16 : 0;
   if (count >= 0) {
     char buf[8];
     snprintf(buf, sizeof(buf), "[%d]", count);
-    _oled.drawStr(128 - _oled.getStrWidth(buf) - 2, 12, buf);
+    _oled.drawStr(128 - _oled.getStrWidth(buf) - 2 - reserve, 12, buf);
   }
+  if (_battLevel) drawBattIcon();
   _oled.setDrawColor(1);
+}
+
+void UiController::drawBattIcon() {
+  // Clear the slot first so a long title clips cleanly under the icon
+  // (device-menu titles run to ~126 px). Empty battery outline + nub.
+  _oled.setDrawColor(1);
+  _oled.drawBox(112, 0, 16, 16);
+  _oled.setDrawColor(0);
+  if (_blinkOn) {
+    _oled.drawFrame(114, 4, 10, 8);
+    _oled.drawBox(124, 6, 2, 4);
+  }
 }
 
 void UiController::drawFooter(const char *text) {
@@ -1452,7 +1514,13 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
-      drawFooter("Drehen + Druecken");
+      if (_battLevel >= 2) {
+        char f[32];
+        snprintf(f, sizeof(f), "Batterie tauschen! (%.2f V)", (double)_vbat);
+        drawFooter(f);
+      } else {
+        drawFooter("Drehen + Druecken");
+      }
       break;
     }
 
@@ -1751,8 +1819,11 @@ void UiController::render() {
     case SCR_SELF_UPDATE: {
       drawTitle("Update-Modus");
       if (_selfUpd == SELFUPD_REFUSED) {
+        char lim[24];
+        snprintf(lim, sizeof(lim), "(min. %.1f V oder USB)",
+                 (double)cfg::VBAT_MIN_FOR_UPDATE);
         _oled.drawStr(0, 30, "Akku zu leer!");
-        _oled.drawStr(0, 42, "(min. 3.6 V oder USB)");
+        _oled.drawStr(0, 42, lim);
         drawFooter("Push = Zurueck");
       } else if (_webUpd.updateDone()) {
         _oled.drawStr(0, 36, "Update OK - Neustart");
@@ -1832,7 +1903,7 @@ void UiController::render() {
                (unsigned long)ESP.getFreeHeap());
       _oled.drawStr(0, 44, buf);
       const float vbat = readVbat();
-      if (vbat > 3.0f) {
+      if (vbat > cfg::VBAT_USB_V) {
         snprintf(buf, sizeof(buf), "Up %lumin Batt %.2fV",
                  (unsigned long)(millis() / 60000UL), (double)vbat);
       } else {

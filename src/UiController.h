@@ -136,6 +136,10 @@ class UiController {
   // reboot happened), then restarts. Never returns.
   void rebootWithScreen(const char *line);
   float readVbat() const;
+  // Battery supervision (Doc 18 §4.2): periodic VBAT sample, warn/replace
+  // level with hysteresis, blink phase for the title-bar icon.
+  void pollBattery(uint32_t now);
+  void drawBattIcon();  // inside the (inverted) title bar, top right
 
   // '^' marker: a newer firmware of the same device type is known –
   // either currently in the list or ever seen before (VersionMemo).
@@ -230,6 +234,13 @@ class UiController {
   // live monitor
   HitEntry _hits[MONITOR_RING];
   size_t _hitCount = 0;
+
+  // battery supervision
+  float _vbat = 0;
+  uint32_t _vbatNextMs = 0;
+  uint8_t _battLevel = 0;   // 0 = ok/USB, 1 = warn (icon), 2 = replace (+ message)
+  bool _blinkOn = false;
+  uint32_t _blinkMs = 0;
 
   uint32_t _lastRenderMs = 0;
   bool _dirty = true;
