@@ -58,6 +58,13 @@ button:hover,a.btn:hover{background:#0d8c80;color:#fff}
 .log{background:#0a0c0d;border:1px solid #23282a;border-radius:6px;padding:12px;margin:0 0 12px;font-family:Menlo,Consolas,monospace;font-size:11px;line-height:1.45;color:#c7cdcd;white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto}
 .ft{font-size:11px;color:#565c5e;text-align:center;letter-spacing:1px;border-top:1px solid #24282a;margin-top:18px;padding-top:14px}
 .ok{color:#79C8B4;font-weight:700}
+.nets{display:flex;flex-direction:column;gap:6px;margin:4px 0 2px}
+.net{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#16191b;border:1px solid #23282a;border-radius:6px;padding:8px 12px;color:#e8eaea}
+.net:hover{border-color:#0d8c80;color:#fff}
+.net b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.net i{font-style:normal;color:#6e7578;font-size:11px;white-space:nowrap}
+.nmsg{font-size:12px;color:#6e7578}
+button[disabled]{opacity:.5;cursor:default}
 </style>
 </head>
 <body>
@@ -93,12 +100,34 @@ static const char WEB_SEC_WLAN[] = R"rawpage(
 <h2>WLAN F&Uuml;R INTERNET-UPDATES</h2>
 <p>Aktuell: <b>%WIFI_STATUS%</b></p>
 <div class="col">
-<input type="text" name="ssid" placeholder="SSID">
+<button type="button" id="sc">WLANs suchen</button>
+<div id="nets" class="nets"></div>
+<input type="text" name="ssid" placeholder="SSID" value="%WIFI_SSID%">
 <input type="password" name="pass" placeholder="Passwort">
 <button type="submit">WLAN speichern</button>
 </div>
-<div class="hint">Genutzt von Tools &gt; <b>Internet-Update</b>: Die Box verbindet sich nur dort mit dem WLAN und bleibt sonst auf ESP-NOW.</div>
+<div class="hint">Genutzt von Tools &gt; <b>Internet-Update</b>: Die Box verbindet sich nur dort mit dem WLAN und bleibt sonst auf ESP-NOW. W&auml;hrend der Suche kann die Verbindung zur Box kurz wackeln.</div>
 </form>
+<script>
+(function(){
+var b=document.getElementById('sc'),n=document.getElementById('nets');
+var si=document.querySelector('input[name=ssid]'),pi=document.querySelector('input[name=pass]');
+function msg(t){n.textContent='';var d=document.createElement('div');d.className='nmsg';d.textContent=t;n.appendChild(d);}
+function done(){b.disabled=false;b.textContent='WLANs suchen';}
+function row(e){var a=document.createElement('a');a.href='#';a.className='net';
+var s=document.createElement('b');s.textContent=e.ssid;a.appendChild(s);
+var i=document.createElement('i');i.textContent=(e.enc?'gesichert \u00b7 ':'offen \u00b7 ')+e.rssi+' dBm';a.appendChild(i);
+a.addEventListener('click',function(ev){ev.preventDefault();si.value=e.ssid;pi.value='';pi.focus();});
+return a;}
+function poll(){fetch('/scan',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+if(d.busy){setTimeout(poll,1000);return;}
+n.textContent='';if(!d.length){msg('Keine WLANs gefunden.');}
+d.forEach(function(e){n.appendChild(row(e));});done();
+}).catch(function(){msg('Fehler bei der Suche \u2013 bitte erneut versuchen.');done();});}
+b.addEventListener('click',function(){b.disabled=true;b.textContent='Suche...';msg('Suche l\u00e4uft...');
+fetch('/scan?start=1',{cache:'no-store'}).then(function(){setTimeout(poll,1500);}).catch(function(){setTimeout(poll,1500);});});
+})();
+</script>
 )rawpage";
 
 static const char WEB_SEC_IMAGES[] = R"rawpage(

@@ -84,12 +84,15 @@ an/aus, K4 = OK.
 Jede Version gibt es als [GitHub-Release](../../releases) mit fertiger
 `infinitag-config-vX.Y.Z.bin`. Am bequemsten per **Netz-Update**:
 Tools → **„Box-Update suchen"** – die Box lädt und installiert das
-Release selbst (WLAN dafür einmalig im Update-Modus hinterlegen).
+Release selbst (WLAN dafür einmalig im Update-Modus hinterlegen – die
+WLAN-Seite sucht die Netze in Reichweite, ein Klick übernimmt die SSID).
 Alternativ der SoftAP-Weg:
 
 1. Tools → **„Update-Modus"** (prüft vorher den Batteriestand)
 2. Die Box öffnet ein WLAN `infinitag-cfg-XXXXXX` (Seite: `http://192.168.4.1`)
-3. Mit Laptop/Handy verbinden, `.bin` auf `http://192.168.4.1` hochladen
+3. Mit Laptop/Handy verbinden – das Handy bietet die Seite meist selbst an
+   (Captive Portal), sonst `http://192.168.4.1` öffnen; `.bin` hochladen
+   (für den Upload ggf. einen echten Browser statt des Anmelde-Fensters nehmen)
 4. Die Box prüft das Image und startet mit der neuen Version neu
 
 Die Upload-Seite zeigt an, welches Gerät man vor sich hat, und lehnt

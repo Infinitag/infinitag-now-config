@@ -49,6 +49,9 @@ jobs:
       - name: PlatformIO installieren
         run: pip install platformio
 
+      - name: Native Unit-Tests
+        run: pio test -e native
+
       - name: Firmware bauen
         run: pio run -e configbox
 

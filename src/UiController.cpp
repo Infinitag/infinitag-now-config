@@ -9,6 +9,7 @@
 #include "NetUpdater.h"
 #include "WebLog.h"
 #include "WebPage.h"
+#include "WifiScanJson.h"
 #include "SoundCatalog.h"
 
 using namespace inow;
@@ -439,7 +440,51 @@ void UiController::buildWebPages() {
     String sec = WEB_SEC_WLAN;
     sec.replace("%WIFI_STATUS%",
                 curSsid[0] ? curSsid : "nicht konfiguriert");
+    // prefill the form with the stored SSID (HTML-escaped: it is user
+    // input and may contain quotes/ampersands)
+    String esc = curSsid;
+    esc.replace("&", "&amp;");
+    esc.replace("\"", "&quot;");
+    esc.replace("<", "&lt;");
+    sec.replace("%WIFI_SSID%", esc);
     _webUpd.server().send(200, "text/html", webPage("/wlan", sec));
+  });
+  // Async WLAN scan for the WLAN page: ?start=1 kicks a scan off, plain
+  // GET polls - {"busy":1} while running, else the JSON list (and the
+  // results are released). Needs the STA interface -> WIFI_AP_STA is
+  // set in beginSelfUpdate(). Never scan during a flash: it takes the
+  // radio off the AP channel for a couple of seconds.
+  srv.on("/scan", HTTP_GET, [this]() {
+    WebServer &s = _webUpd.server();
+    if (_webUpd.uploadActive()) {
+      s.send(409, "application/json", "{\"busy\":1}");
+      return;
+    }
+    const int16_t r = WiFi.scanComplete();
+    if (r == WIFI_SCAN_RUNNING) {
+      s.send(200, "application/json", "{\"busy\":1}");
+      return;
+    }
+    if (r < 0 || s.hasArg("start")) {  // nothing pending (or explicit restart)
+      if (r >= 0) WiFi.scanDelete();
+      WiFi.scanNetworks(/*async=*/true, /*hidden=*/false, /*passive=*/false,
+                        /*max_ms_per_chan=*/120);
+      s.send(200, "application/json", "{\"busy\":1}");
+      return;
+    }
+    const size_t n = (size_t)r < wifiscan::MAX_ENTRIES ? (size_t)r
+                                                        : wifiscan::MAX_ENTRIES;
+    String names[wifiscan::MAX_ENTRIES];  // keep the SSID strings alive
+    wifiscan::Entry e[wifiscan::MAX_ENTRIES];
+    for (size_t i = 0; i < n; i++) {
+      names[i] = WiFi.SSID((uint8_t)i);
+      e[i] = {names[i].c_str(), WiFi.RSSI((uint8_t)i),
+              WiFi.encryptionType((uint8_t)i) != WIFI_AUTH_OPEN};
+    }
+    static char json[2048];
+    wifiscan::toJson(e, n, json, sizeof(json));
+    WiFi.scanDelete();
+    s.send(200, "application/json", json);
   });
   srv.on("/images", HTTP_GET, [this]() {
     String status;
@@ -546,6 +591,9 @@ void UiController::beginSelfUpdate() {
   s_imgStore = &_images;
   _webUpd.setStoreHooks(&kStoreHooks);
   if (_webUpd.begin(_selfUpdAp, ver, label, "infinitag-config")) {
+    // STA interface alongside the AP: the WLAN page's scan needs it
+    // (the AP keeps running, nothing connects on the STA side)
+    WiFi.mode(WIFI_AP_STA);
     buildWebPages();  // needs the running server for the extra routes
     _webUpd.server().on("/wifi", HTTP_POST, [this]() {
       WebServer &srv = _webUpd.server();
