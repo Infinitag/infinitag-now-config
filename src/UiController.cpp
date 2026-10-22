@@ -1644,6 +1644,21 @@ void UiController::render() {
 
     case SCR_DEVICE_LIST: {
       const int count = (int)_reg.count(_listType);
+      if (_bootBulkType != 0) {
+        // Wiedereinstieg: the bulk update starts once the discovery
+        // window has collected replies - say so instead of showing the
+        // bare list ("nothing happens" for 2-3 s, feedback 2026-10-22)
+        drawTitle("Sammel-Update");
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Suche %s...",
+                 _listType == DEV_STATION ? "Stationen" : "Targets");
+        _oled.drawStr(0, 30, buf);
+        snprintf(buf, sizeof(buf), "%d gefunden", count);
+        _oled.drawStr(0, 44, buf);
+        drawFooter("Update startet gleich");
+        _dirty = true;  // keep the counter fresh while waiting
+        break;
+      }
       drawTitle(_listType == DEV_STATION ? "Stationen" : "Targets", count);
 
       struct Ctx {
