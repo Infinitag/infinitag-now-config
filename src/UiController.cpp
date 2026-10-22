@@ -1620,13 +1620,15 @@ void UiController::render() {
                  macSuffix(d->mac, mac);
                  // Stations: negotiated shooter id (read-only, Core v3.5),
                  // "IR?" while still negotiating / old firmware on 0.
-                 char ir[6] = "";
+                 // 4 chars: row = 1 + 6 + 1 + 4 + 7 = 19 x 6 px + 7 px
+                 // cursor column = 121 px, clear of the scrollbar.
+                 char ir[5] = "";
                  if (x->type == DEV_STATION) {
                    StationConfig sc;
                    decodeStationConfig(d->info.config_blob,
                                        d->info.config_blob_len, sc);
-                   if (sc.ir_id == 0) snprintf(ir, sizeof(ir), "IR?  ");
-                   else snprintf(ir, sizeof(ir), "IR%-3u", sc.ir_id);
+                   if (sc.ir_id == 0) snprintf(ir, sizeof(ir), "IR? ");
+                   else snprintf(ir, sizeof(ir), "IR%-2u", sc.ir_id);
                  }
                  // '^' = a newer firmware of this type exists in the list
                  snprintf(b, n, "%s%s %s%4ddBm",
