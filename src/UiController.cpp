@@ -419,7 +419,10 @@ String UiController::webPage(const char *activePath, const String &section) {
     nav += "</a>";
   }
 
-  String page = WEB_PAGE_TOP;
+  String page;
+  page.reserve(strlen(WEB_PAGE_TOP) + section.length() +
+               strlen(WEB_PAGE_BOTTOM) + nav.length() + 64);
+  page = WEB_PAGE_TOP;
   page.replace("%DEVICE_ID%", mac);
   page.replace("%NAV%", nav);
   page += section;
@@ -1391,7 +1394,21 @@ void UiController::handleTimers() {
     }
     if (now >= _selfUpdDeadline && !_webUpd.uploadActive())
       rebootWithScreen("Timeout");
-    _dirty = true;  // keep the client counter fresh
+    // Redraw only on change (+ 1 s heartbeat). Redrawing every loop
+    // starved the web server: each OLED frame blocks the loop for the
+    // whole I2C transfer, and pages took 2-4 s per click (2026-10-22).
+    static int lastClients = -1;
+    static bool lastUploading = false;
+    static uint32_t lastBeat = 0;
+    const int clients = _webUpd.clientCount();
+    const bool uploading = _webUpd.uploadActive();
+    if (clients != lastClients || uploading != lastUploading ||
+        now - lastBeat >= 1000) {
+      lastClients = clients;
+      lastUploading = uploading;
+      lastBeat = now;
+      _dirty = true;
+    }
   }
 
   // ESP-NOW push: drive the sender / wait for the device's reboot

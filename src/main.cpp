@@ -46,6 +46,7 @@ void setup() {
   }
 
   Wire.begin(cfg::PIN_I2C_SDA, cfg::PIN_I2C_SCL);
+  Wire.setClock(cfg::I2C_CLOCK_HZ);
   gUi.begin();
 }
 
