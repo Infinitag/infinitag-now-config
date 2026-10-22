@@ -22,7 +22,6 @@ static const char WEB_PAGE_TOP[] = R"rawpage(
 <style>
 body{margin:0;background:#0c0e0f;font-family:Helvetica,Arial,sans-serif;color:#e8eaea;font-size:13px}
 a{color:#4db3a2;text-decoration:none}
-a:hover{color:#79C8B4}
 .wrap{max-width:440px;margin:0 auto;padding:16px}
 .card{background:#131516;border:1px solid #23282a;border-radius:8px;overflow:hidden}
 .bar{height:5px;background:linear-gradient(90deg,#79C8B4,#03817D)}
@@ -34,7 +33,6 @@ a:hover{color:#79C8B4}
 .sub{font-size:11px;color:#8a9092;letter-spacing:1px;margin-top:2px}
 .nav{display:flex;border-bottom:1px solid #23282a;padding:0 16px;flex-wrap:wrap}
 .nav a{padding:10px 14px;font-size:13px;color:#8a9092}
-.nav a:hover{color:#e8eaea}
 .nav a.on{color:#fff;font-weight:700;border-bottom:2px solid #03817D;margin-bottom:-1px}
 .bd{padding:6px 28px 28px}
 .sec{border-top:2px solid #333c3f;margin-top:28px;padding-top:22px}
@@ -49,22 +47,21 @@ p{color:#8a9092;margin:0 0 10px;line-height:1.5}
 .file i{font-style:normal;color:#6e7578;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file input{display:none}
 .rbt{margin-left:auto;color:#8a9092;border:1px solid #3a4144;border-radius:4px;padding:3px 9px;font-size:14px;align-self:flex-start}
-.rbt:hover{color:#fff;border-color:#0d8c80}
 .file.drag{border-color:#79C8B4;background:#1b2422}
 input[type=text],input[type=password]{background:#131516;border:1px solid #3a4144;border-radius:6px;color:#e8eaea;padding:9px 12px;font-size:13px}
 button,a.btn{align-self:flex-start;display:inline-block;background:transparent;color:#79C8B4;border:1px solid #0d8c80;border-radius:4px;padding:8px 18px;font-size:13px;font-weight:700;cursor:pointer}
-button:hover,a.btn:hover{background:#0d8c80;color:#fff}
 .btnrow{display:flex;gap:10px}
 .log{background:#0a0c0d;border:1px solid #23282a;border-radius:6px;padding:12px;margin:0 0 12px;font-family:Menlo,Consolas,monospace;font-size:11px;line-height:1.45;color:#c7cdcd;white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto}
 .ft{font-size:11px;color:#565c5e;text-align:center;letter-spacing:1px;border-top:1px solid #24282a;margin-top:18px;padding-top:14px}
 .ok{color:#79C8B4;font-weight:700}
 .nets{display:flex;flex-direction:column;gap:6px;margin:4px 0 2px}
 .net{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#16191b;border:1px solid #23282a;border-radius:6px;padding:8px 12px;color:#e8eaea}
-.net:hover{border-color:#0d8c80;color:#fff}
 .net b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .net i{font-style:normal;color:#6e7578;font-size:11px;white-space:nowrap}
 .nmsg{font-size:12px;color:#6e7578}
-button[disabled]{opacity:.5;cursor:default}
+button.busy{opacity:.5;cursor:default}
+a,button{touch-action:manipulation;-webkit-tap-highlight-color:rgba(121,200,180,.25)}
+@media (hover:hover){a:hover{color:#79C8B4}.nav a:hover{color:#e8eaea}.rbt:hover{color:#fff;border-color:#0d8c80}button:hover,a.btn:hover{background:#0d8c80;color:#fff}.net:hover{border-color:#0d8c80;color:#fff}}
 </style>
 </head>
 <body>
@@ -113,18 +110,19 @@ static const char WEB_SEC_WLAN[] = R"rawpage(
 var b=document.getElementById('sc'),n=document.getElementById('nets');
 var si=document.querySelector('input[name=ssid]'),pi=document.querySelector('input[name=pass]');
 function msg(t){n.textContent='';var d=document.createElement('div');d.className='nmsg';d.textContent=t;n.appendChild(d);}
-function done(){b.disabled=false;b.textContent='WLANs suchen';}
+var busy=false;
+function done(){busy=false;b.classList.remove('busy');b.textContent='WLANs suchen';}
 function row(e){var a=document.createElement('a');a.href='#';a.className='net';
 var s=document.createElement('b');s.textContent=e.ssid;a.appendChild(s);
 var i=document.createElement('i');i.textContent=(e.enc?'gesichert \u00b7 ':'offen \u00b7 ')+e.rssi+' dBm';a.appendChild(i);
-a.addEventListener('click',function(ev){ev.preventDefault();si.value=e.ssid;pi.value='';pi.focus();});
+a.addEventListener('click',function(ev){ev.preventDefault();si.value=e.ssid;pi.value='';});
 return a;}
 function poll(){fetch('/scan',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
 if(d.busy){setTimeout(poll,1000);return;}
 n.textContent='';if(!d.length){msg('Keine WLANs gefunden.');}
 d.forEach(function(e){n.appendChild(row(e));});done();
 }).catch(function(){msg('Fehler bei der Suche \u2013 bitte erneut versuchen.');done();});}
-b.addEventListener('click',function(){b.disabled=true;b.textContent='Suche...';msg('Suche l\u00e4uft...');
+b.addEventListener('click',function(){if(busy)return;busy=true;b.classList.add('busy');b.blur();b.textContent='Suche...';msg('Suche l\u00e4uft...');
 fetch('/scan?start=1',{cache:'no-store'}).then(function(){setTimeout(poll,1500);}).catch(function(){setTimeout(poll,1500);});});
 })();
 </script>
