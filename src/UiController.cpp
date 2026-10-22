@@ -194,9 +194,9 @@ void UiController::enterEdit(Device &d) {
       laserVal = 1 + g;
     }
     add("Laser", laserVal, 0, 1 + LASER_GLOW_MAX, 1, nullptr, FMT_LASER);
-    // Shooter id in the IR telegram: hits are routed back by it. 0 is a
-    // valid value (factory group), see PROTOCOL.md v0x03.
-    add("IR-ID", c.ir_id, 0, IR_ID_MAX, 1);
+    // No "IR-ID" field anymore: since Core v3.5 the stations negotiate the
+    // shooter id among themselves (PROTOCOL.md "IR-ID-Aushandlung"); the
+    // device list shows the negotiated value read-only.
     add("LED-Hell.", c.led_bright_pct == 0 ? 100 : c.led_bright_pct, 1, 100,
         1, "%");
   } else {
@@ -246,8 +246,8 @@ void UiController::sendCfgWrite() {
       c.laser_mode = LASER_MODE_GLOW;
       c.laser_glow = (uint8_t)(lv - 1);
     }
-    c.ir_id = (uint8_t)_fields[4].value;
-    c.led_bright_pct = (uint8_t)_fields[5].value;
+    c.ir_id = 0;  // read-only field, the station ignores it (negotiated)
+    c.led_bright_pct = (uint8_t)_fields[4].value;
     encodeStationConfig(c, p.payload);
   } else {
     TargetConfig c;
@@ -1618,9 +1618,19 @@ void UiController::render() {
                  if (!d) { b[0] = '\0'; return; }
                  char mac[7];
                  macSuffix(d->mac, mac);
+                 // Stations: negotiated shooter id (read-only, Core v3.5),
+                 // "IR?" while still negotiating / old firmware on 0.
+                 char ir[6] = "";
+                 if (x->type == DEV_STATION) {
+                   StationConfig sc;
+                   decodeStationConfig(d->info.config_blob,
+                                       d->info.config_blob_len, sc);
+                   if (sc.ir_id == 0) snprintf(ir, sizeof(ir), "IR?  ");
+                   else snprintf(ir, sizeof(ir), "IR%-3u", sc.ir_id);
+                 }
                  // '^' = a newer firmware of this type exists in the list
-                 snprintf(b, n, "%s%s %4ddBm",
-                          x->ui->isOutdated(*d) ? "^" : " ", mac,
+                 snprintf(b, n, "%s%s %s%4ddBm",
+                          x->ui->isOutdated(*d) ? "^" : " ", mac, ir,
                           d->info.rssi_self);
                },
                &ctx);

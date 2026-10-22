@@ -18,11 +18,14 @@ ganz ohne WLAN-Router, App oder Laptop.
 - **Geräte finden statt einrichten:** Ein Discovery-Broadcast listet
   alle Stationen und Targets in Reichweite (MAC-Kennung + Signalstärke);
   das markierte Gerät blinkt weiß – man sieht sofort, welches gemeint ist
-- **Alles einstellbar:** Lautstärke, Stab-Statusfarben und -Helligkeit,
-  IR-ID der Stationen (Schützen-Kennung – der Treffer-Sound folgt
-  automatisch dem Zauberstab, der geschossen hat), Sounds, Trefferzeiten
-  (in Sekunden), Prop-Ausgänge und Ring-Helligkeit der Targets – Werte
-  werden direkt ins Gerät geschrieben und dort dauerhaft gespeichert
+- **Alles einstellbar:** Lautstärke, Stab-Statusfarben und -Helligkeit
+  der Stationen, Sounds, Trefferzeiten (in Sekunden), Prop-Ausgänge und
+  Ring-Helligkeit der Targets – Werte werden direkt ins Gerät geschrieben
+  und dort dauerhaft gespeichert. Die IR-ID der Stationen
+  (Schützen-Kennung – der Treffer-Sound folgt automatisch dem Zauberstab,
+  der geschossen hat) wird **nicht** eingestellt, sondern von den
+  Stationen untereinander ausgehandelt; die Liste zeigt sie an
+  (`IR3`, `IR?` = noch in Aushandlung)
 - **Testen aus der Ferne:** Sound-Vorhören, kompletter
   Stations-Selbsttest (Sound, LEDs, Laser, IR mit Selbstempfang,
   Trigger) und der **Treffer-Test** – ein Target spielt die komplette
