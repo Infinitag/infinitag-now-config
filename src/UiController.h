@@ -17,6 +17,7 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 
+#include "BatteryMonitor.h"
 #include "DeviceRegistry.h"
 #include "EspNowPush.h"
 #include "EspNowService.h"
@@ -58,6 +59,7 @@ class UiController {
     SCR_TOOLS_INFO,
     SCR_SELF_UPDATE,   // own SoftAP web updater (ends in reboot)
     SCR_IMAGES,        // stored device firmware images (Doc 21 E1)
+    SCR_BATT_LOW,      // lock screen: pack too weak, swap the cells
   };
 
   // Static rows before the devices in a device list:
@@ -176,7 +178,8 @@ class UiController {
   char _statusLine[24] = "";    // "Gespeichert" / "Fehler: ..."
 
   // after-boot bulk update (resume action of the net update)
-  uint8_t _bootBulkType = 0;    // 0 = none, else DEV_STATION/DEV_TARGET
+  uint8_t _bootBulkType = 0;
+  bool _bootBulkRetried = false;  // second discovery sent while waiting    // 0 = none, else DEV_STATION/DEV_TARGET
   uint32_t _bootBulkAtMs = 0;   // start once the discovery window passed
 
   // transient footer message in the device menu (e.g. "Treffer-Test")
@@ -235,12 +238,14 @@ class UiController {
   HitEntry _hits[MONITOR_RING];
   size_t _hitCount = 0;
 
-  // battery supervision
+  // battery supervision (level logic in BatteryMonitor.h)
+  battery::Monitor _batt;
   float _vbat = 0;
   uint32_t _vbatNextMs = 0;
-  uint8_t _battLevel = 0;   // 0 = ok/USB, 1 = warn (icon), 2 = replace (+ message)
+  uint8_t _battLevel = 0;   // 0 = ok/USB, 1 = warn (icon), 2 = lock screen
   bool _blinkOn = false;
   uint32_t _blinkMs = 0;
+  bool radioBusy() const;   // long TX phases: do not sample VBAT
 
   uint32_t _lastRenderMs = 0;
   bool _dirty = true;

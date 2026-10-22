@@ -53,7 +53,9 @@ static const uint32_t SELFTEST_DEADLINE_MS[5] = {30000, 5000, 5000, 5000,
 UiController::UiController(EspNowService &net, DeviceRegistry &reg,
                            InputController &in)
     : _net(net), _reg(reg), _in(in),
-      _oled(U8G2_R0, /* reset=*/U8X8_PIN_NONE) {}
+      _oled(U8G2_R0, /* reset=*/U8X8_PIN_NONE),
+      _batt({cfg::VBAT_USB_V, cfg::VBAT_WARN_V, cfg::VBAT_REPLACE_V,
+             cfg::VBAT_HYST_V, cfg::VBAT_DEBOUNCE}) {}
 
 void UiController::begin() {
   _memo.load();
@@ -66,7 +68,11 @@ void UiController::begin() {
   }
   _oled.begin();
   _oled.setFont(u8g2_font_6x10_tf);
-  pollBattery(millis());  // first sample now: icon correct on frame one
+  // Sample twice right away (debounce = 2): a dead pack must lock the
+  // box on frame one, not after the first poll interval.
+  pollBattery(millis());
+  _vbatNextMs = 0;
+  pollBattery(millis());
   gotoScreen(SCR_MAIN);
 
   // Wiedereinstieg nach dem Netz-Update-Reboot: die vor dem Neustart
@@ -81,7 +87,8 @@ void UiController::begin() {
     startDiscovery(actType);
     if (act & NetUpdater::RESUME_BULK) {
       _bootBulkType = actType;
-      _bootBulkAtMs = millis() + 1500;
+      _bootBulkRetried = false;
+      _bootBulkAtMs = millis() + 2500;
     }
     logf("[NET] Wiedereinstieg: Liste Typ %u%s\n", actType,
          (act & NetUpdater::RESUME_BULK) ? " + Sammel-Update" : "");
@@ -343,28 +350,19 @@ float UiController::readVbat() const {
   return (mvAcc / 8) * cfg::VBAT_DIVIDER / 1000.0f;
 }
 
+bool UiController::radioBusy() const {
+  // Seconds of continuous TX: firmware push / bulk (phase 0 = sending)
+  // and the own SoftAP mode. A fresh 5.8 V pack sags to ~5.2 V there
+  // (observed 2026-10-22) - sampling would warn for no reason.
+  return ((_screen == SCR_PUSH || _screen == SCR_BULK) && _pushPhase == 0) ||
+         _selfUpd == SELFUPD_ACTIVE;
+}
+
 void UiController::pollBattery(uint32_t now) {
-  if ((int32_t)(now - _vbatNextMs) >= 0) {
+  if ((int32_t)(now - _vbatNextMs) >= 0 && !radioBusy()) {
     _vbatNextMs = now + cfg::VBAT_POLL_MS;
     _vbat = readVbat();
-    uint8_t lvl = _battLevel;
-    if (_vbat <= cfg::VBAT_USB_V) {
-      lvl = 0;  // divider floats: USB powered, nothing to supervise
-    } else {
-      // step DOWN (worse) right at the threshold, step UP (better) only
-      // once the reading sits clearly above it - the 8-sample average
-      // still scatters by ~0.1 V between polls
-      if (lvl < 2 && _vbat <= cfg::VBAT_REPLACE_V) {
-        lvl = 2;
-      } else if (lvl == 2 && _vbat > cfg::VBAT_REPLACE_V + cfg::VBAT_HYST_V) {
-        lvl = 1;
-      }
-      if (lvl < 1 && _vbat <= cfg::VBAT_WARN_V) {
-        lvl = 1;
-      } else if (lvl == 1 && _vbat > cfg::VBAT_WARN_V + cfg::VBAT_HYST_V) {
-        lvl = 0;
-      }
-    }
+    const uint8_t lvl = _batt.update(_vbat);
     if (lvl != _battLevel) {
       _battLevel = lvl;
       _blinkOn = true;
@@ -372,15 +370,22 @@ void UiController::pollBattery(uint32_t now) {
       logf("[BAT] %.2f V -> Stufe %u\n", (double)_vbat, lvl);
       _dirty = true;
     }
+    // lock screen: level 2 takes over whatever is on the display; it
+    // only clears once the pack reads fine again (= after a cell swap,
+    // which is a power cycle anyway)
+    if (_battLevel >= 2 && _screen != SCR_BATT_LOW) {
+      logf("[BAT] Sperr-Screen\n");
+      gotoScreen(SCR_BATT_LOW);
+    } else if (_battLevel < 2 && _screen == SCR_BATT_LOW) {
+      gotoScreen(SCR_MAIN);
+    }
   }
   if (_battLevel && now - _blinkMs >= cfg::VBAT_BLINK_MS) {
     _blinkMs = now;
     _blinkOn = !_blinkOn;
     // no extra repaints while the push sender runs: rendering blocks the
     // I2C bus and with it the loop that feeds the sender (see tick)
-    const bool pushing =
-        (_screen == SCR_PUSH || _screen == SCR_BULK) && _pushPhase == 0;
-    if (!pushing) _dirty = true;
+    if (!radioBusy()) _dirty = true;
   }
 }
 
@@ -1014,6 +1019,7 @@ void UiController::handleInput() {
       (_in.isHeld(BTN_K2) || delta >= 4 || delta <= -4) ? 10 : 1;
 
   if (delta == 0 && !push && !back && !k2 && !k3) return;
+  if (_screen == SCR_BATT_LOW) return;  // lock screen: no actions at all
   _dirty = true;
 
   switch (_screen) {
@@ -1274,6 +1280,9 @@ void UiController::handleInput() {
     case SCR_TOOLS_INFO:
       if (back || push) gotoScreen(SCR_MAIN);
       break;
+
+    case SCR_BATT_LOW:
+      break;  // already returned above - keeps -Wswitch quiet
   }
 }
 
@@ -1297,10 +1306,23 @@ void UiController::handleTimers() {
   // gefundene Geraete bleibt die Liste stehen ("suche Geraete...").
   if (_bootBulkType != 0 && now >= _bootBulkAtMs) {
     const uint8_t t = _bootBulkType;
-    _bootBulkType = 0;
-    if (_screen == SCR_DEVICE_LIST && _listType == t && _reg.count(t) > 0) {
+    if (_screen != SCR_DEVICE_LIST || _listType != t) {
+      _bootBulkType = 0;  // user navigated away - drop it
+    } else if (_reg.count(t) > 0) {
+      _bootBulkType = 0;
+      logf("[NET] Wiedereinstieg: Sammel-Update mit %u Geraeten\n",
+           (unsigned)_reg.count(t));
       gotoScreen(SCR_BULK);
       _dirty = true;
+    } else if (!_bootBulkRetried) {
+      // nobody answered yet - one more discovery, then another window
+      _bootBulkRetried = true;
+      _bootBulkAtMs = now + 2500;
+      startDiscovery(t);
+      logf("[NET] Wiedereinstieg: keine Antwort, Discovery wiederholt\n");
+    } else {
+      _bootBulkType = 0;  // give up, the list stays ("suche Geraete...")
+      logf("[NET] Wiedereinstieg: keine Geraete gefunden\n");
     }
   }
 
@@ -1562,13 +1584,18 @@ void UiController::render() {
                  snprintf(b, n, "%s", ((Ctx *)c)->items[i]);
                },
                &ctx);
-      if (_battLevel >= 2) {
-        char f[32];
-        snprintf(f, sizeof(f), "Batterie tauschen! (%.2f V)", (double)_vbat);
-        drawFooter(f);
-      } else {
-        drawFooter("Drehen + Druecken");
-      }
+      drawFooter("Drehen + Druecken");
+      break;
+    }
+
+    case SCR_BATT_LOW: {
+      drawTitle("Batterie leer");
+      char buf[24];
+      snprintf(buf, sizeof(buf), "Gemessen: %.2f V", (double)_vbat);
+      _oled.drawStr(0, 28, "Bitte neue Batterien");
+      _oled.drawStr(0, 40, "einlegen (4x AA).");
+      _oled.drawStr(0, 54, buf);
+      drawFooter("Box ausschalten - Zellen tauschen");
       break;
     }
 
