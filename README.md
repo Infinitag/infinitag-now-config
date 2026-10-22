@@ -34,8 +34,10 @@ ganz ohne WLAN-Router, App oder Laptop.
   wird in der Liste markiert (`^`)
 - **Live-Monitor:** Zeigt eingehende Treffer-Meldungen in Echtzeit –
   praktisch beim Aufbau und bei der Fehlersuche
-- **Batteriebetrieb:** 4×AA, Batteriespannung im Tools-Menü; vor einem
-  Update wird der Akkustand geprüft
+- **Batteriebetrieb:** 4×AA, Batteriespannung im Tools-Menü. Ab ≤ 5,3 V
+  blinkt ein Batteriesymbol in der Titelzeile (dann sind keine Updates
+  mehr möglich), ab ≤ 5,2 V meldet das Hauptmenü „Batterie tauschen!“ –
+  schwache Zellen brechen sonst beim Funken ein und die Box startet neu
 
 ## Das Infinitag-Now-System
 
@@ -86,7 +88,7 @@ Release selbst (WLAN dafür einmalig im Update-Modus hinterlegen).
 Alternativ der SoftAP-Weg:
 
 1. Tools → **„Update-Modus"** (prüft vorher den Batteriestand)
-2. Die Box öffnet ein WLAN `infinitag-cfg-XXXXXX`
+2. Die Box öffnet ein WLAN `infinitag-cfg-XXXXXX` (Seite: `http://192.168.4.1`)
 3. Mit Laptop/Handy verbinden, `.bin` auf `http://192.168.4.1` hochladen
 4. Die Box prüft das Image und startet mit der neuen Version neu
 
