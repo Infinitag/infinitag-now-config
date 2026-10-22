@@ -33,9 +33,10 @@ void setup() {
 
   gInput.begin();
 
-  Wire.begin(cfg::PIN_I2C_SDA, cfg::PIN_I2C_SCL);
-  gUi.begin();
-
+  // Radio BEFORE the UI: UiController::begin() may fire the resume
+  // discovery (Wiedereinstieg nach dem Netz-Update) - with ESP-NOW not
+  // yet up that broadcast went nowhere and the bulk update never started
+  // (observed 2026-10-22).
   if (!gNet.begin(cfg::ESPNOW_CHANNEL)) {
     logf("[ERR] ESP-NOW init failed\n");
   } else {
@@ -43,6 +44,9 @@ void setup() {
          gNet.ownMac()[0], gNet.ownMac()[1], gNet.ownMac()[2],
          gNet.ownMac()[3], gNet.ownMac()[4], gNet.ownMac()[5]);
   }
+
+  Wire.begin(cfg::PIN_I2C_SDA, cfg::PIN_I2C_SCL);
+  gUi.begin();
 }
 
 void loop() {

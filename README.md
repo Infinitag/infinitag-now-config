@@ -39,8 +39,9 @@ ganz ohne WLAN-Router, App oder Laptop.
   praktisch beim Aufbau und bei der Fehlersuche
 - **Batteriebetrieb:** 4×AA, Batteriespannung im Tools-Menü. Ab ≤ 5,3 V
   blinkt ein Batteriesymbol in der Titelzeile (dann sind keine Updates
-  mehr möglich), ab ≤ 5,2 V meldet das Hauptmenü „Batterie tauschen!“ –
-  schwache Zellen brechen sonst beim Funken ein und die Box startet neu
+  mehr möglich), ab ≤ 5,2 V sperrt die Box mit „Batterie leer“ –
+  schwache Zellen brechen sonst beim Funken ein und die Box startet neu.
+  Gemessen wird nur bei ruhendem Funk; die Stufenlogik ist nativ getestet
 
 ## Das Infinitag-Now-System
 

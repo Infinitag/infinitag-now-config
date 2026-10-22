@@ -59,7 +59,8 @@ constexpr float VBAT_USB_V     = 3.0f;
 constexpr float VBAT_WARN_V    = 5.3f;   // <= : blinking battery icon (title bar)
 constexpr float VBAT_REPLACE_V = 5.2f;   // <= : "Batterie tauschen" on main screen
 constexpr float VBAT_HYST_V    = 0.1f;   // readings scatter ~0.1 V -> no flicker
-constexpr uint32_t VBAT_POLL_MS  = 2000; // ADC sample interval
+constexpr uint8_t VBAT_DEBOUNCE = 2;     // consecutive low samples before stepping down
+constexpr uint32_t VBAT_POLL_MS  = 2000; // ADC sample interval (idle radio only)
 constexpr uint32_t VBAT_BLINK_MS = 500;  // icon blink half-period
 // Below this pack voltage no update is started (box must not die mid-flash):
 // a multi-minute flash is the heaviest TX load, so the gate sits at the
