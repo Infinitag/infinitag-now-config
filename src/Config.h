@@ -49,9 +49,22 @@ constexpr uint8_t  UPDATE_TIMEOUT_MIN     = 5;      // device SoftAP window
 constexpr uint32_t UPDATE_ACK_TIMEOUT_MS  = 1500;   // UPDATE_BEGIN -> UPDATE_ACK
 constexpr uint32_t SELF_UPDATE_TIMEOUT_MS = 10UL * 60UL * 1000UL;  // own AP window
 constexpr uint8_t CAL_MINUTES = 10;  // Kalibriermodus: Auto-Aus der Station
-// Below this pack voltage no update is started (box must not die mid-flash).
-// Readings < 3.0 V mean "running from USB" (divider floats) -> always OK.
-constexpr float VBAT_MIN_FOR_UPDATE = 3.6f;
+// --- Battery supervision (4xAA alkaline, Doc 18 §4.2) -------------------------
+// Field observation 2026-10-22: at 5.07-5.17 V idle the pack sags so far
+// under radio TX bursts (discovery broadcast, SoftAP start) that the C3
+// brownout-resets - the box "jumps back" to the main menu while screens
+// without radio (Firmware-Info) keep working. Fresh cells read ~5.8 V.
+// Readings <= VBAT_USB_V mean "running from USB" (divider floats) -> OK.
+constexpr float VBAT_USB_V     = 3.0f;
+constexpr float VBAT_WARN_V    = 5.3f;   // <= : blinking battery icon (title bar)
+constexpr float VBAT_REPLACE_V = 5.2f;   // <= : "Batterie tauschen" on main screen
+constexpr float VBAT_HYST_V    = 0.1f;   // readings scatter ~0.1 V -> no flicker
+constexpr uint32_t VBAT_POLL_MS  = 2000; // ADC sample interval
+constexpr uint32_t VBAT_BLINK_MS = 500;  // icon blink half-period
+// Below this pack voltage no update is started (box must not die mid-flash):
+// a multi-minute flash is the heaviest TX load, so the gate sits at the
+// icon level - "if it blinks, no update".
+constexpr float VBAT_MIN_FOR_UPDATE = VBAT_WARN_V;
 
 // Sounds: IDs, Dateien und Anzeigenamen kommen zentral aus dem
 // SoundCatalog.h der Core-Lib (inow::SOUND_COUNT / inow::soundName()).
