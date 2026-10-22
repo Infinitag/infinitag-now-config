@@ -43,6 +43,11 @@ constexpr uint32_t IDENTIFY_PERIOD_MS      = 500;   // resend interval
 constexpr uint8_t  IDENTIFY_DURATION_100MS = 7;     // device blinks 700 ms
 constexpr uint32_t ACK_TIMEOUT_MS          = 800;   // CFG_WRITE -> CFG_ACK
 constexpr uint32_t RENDER_INTERVAL_MS      = 50;    // ~20 fps OLED
+// OLED I2C clock. A full 128x64 frame is ~1.1 KB = ~100 ms at 100 kHz,
+// ~25 ms at 400 kHz (SSD1315 fast mode). Every render blocks the loop
+// that feeds the web server / push sender - keep this high. If the
+// display ever shows garbage, drop back to 100000.
+constexpr uint32_t I2C_CLOCK_HZ            = 400000;
 
 // --- Firmware update (Doc 18, OTA since 2026-07-12) --------------------------------
 constexpr uint8_t  UPDATE_TIMEOUT_MIN     = 5;      // device SoftAP window
