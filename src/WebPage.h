@@ -48,7 +48,7 @@ p{color:#8a9092;margin:0 0 10px;line-height:1.5}
 .file input{display:none}
 .rbt{margin-left:auto;color:#8a9092;border:1px solid #3a4144;border-radius:4px;padding:3px 9px;font-size:14px;align-self:flex-start}
 .file.drag{border-color:#79C8B4;background:#1b2422}
-input[type=text],input[type=password]{background:#131516;border:1px solid #3a4144;border-radius:6px;color:#e8eaea;padding:9px 12px;font-size:13px}
+input[type=text],input[type=password]{background:#131516;border:1px solid #3a4144;border-radius:6px;color:#e8eaea;padding:9px 12px;font-size:16px}/* >=16px: iOS zooms into smaller inputs on focus */
 button,a.btn{align-self:flex-start;display:inline-block;background:transparent;color:#79C8B4;border:1px solid #0d8c80;border-radius:4px;padding:8px 18px;font-size:13px;font-weight:700;cursor:pointer}
 .btnrow{display:flex;gap:10px}
 .log{background:#0a0c0d;border:1px solid #23282a;border-radius:6px;padding:12px;margin:0 0 12px;font-family:Menlo,Consolas,monospace;font-size:11px;line-height:1.45;color:#c7cdcd;white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto}
