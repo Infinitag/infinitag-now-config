@@ -99,8 +99,8 @@ static const char WEB_SEC_WLAN[] = R"rawpage(
 <div class="col">
 <button type="button" id="sc">WLANs suchen</button>
 <div id="nets" class="nets"></div>
-<input type="text" name="ssid" placeholder="SSID" value="%WIFI_SSID%">
-<input type="password" name="pass" placeholder="Passwort">
+<input type="text" name="ssid" placeholder="SSID" value="%WIFI_SSID%" readonly autocomplete="off" autocapitalize="off">
+<input type="password" name="pass" placeholder="Passwort" readonly>
 <button type="submit">WLAN speichern</button>
 </div>
 <div class="hint">Genutzt von Tools &gt; <b>Internet-Update</b>: Die Box verbindet sich nur dort mit dem WLAN und bleibt sonst auf ESP-NOW. W&auml;hrend der Suche kann die Verbindung zur Box kurz wackeln.</div>
@@ -109,6 +109,10 @@ static const char WEB_SEC_WLAN[] = R"rawpage(
 (function(){
 var b=document.getElementById('sc'),n=document.getElementById('nets');
 var si=document.querySelector('input[name=ssid]'),pi=document.querySelector('input[name=pass]');
+/* Captive browsers focus the first field on load and pop the keyboard:
+   fields stay readonly until a real touch - programmatic focus then opens nothing. */
+[si,pi].forEach(function(f){['touchstart','mousedown'].forEach(function(ev){f.addEventListener(ev,function(){f.readOnly=false;},{passive:true});});});
+window.addEventListener('pageshow',function(){var a=document.activeElement;if(a&&a!==document.body&&a.blur)a.blur();});
 function msg(t){n.textContent='';var d=document.createElement('div');d.className='nmsg';d.textContent=t;n.appendChild(d);}
 var busy=false;
 function done(){busy=false;b.classList.remove('busy');b.textContent='WLANs suchen';}
